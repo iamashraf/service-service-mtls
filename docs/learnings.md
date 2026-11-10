@@ -6,3 +6,11 @@
 We hash the DER bytes because they are the one canonical form. Re-encoding the PEM or reading fields can differ, the raw bytes cannot.
 The thumbprint names one exact certificate. It says nothing about who the owner is. A CN is just text inside the cert.
 Gotcha: base64url with padding (`=`) or std base64 (`+`, `/`) gives a different string and the match silently fails.
+
+## Task 2: ES256 JWT
+
+`Verify` checks the header says `ES256` before it looks at the signature. A token that picks its own algorithm (`none`, or `HS256` keyed with the public key) is how alg confusion attacks work.
+JOSE signatures are raw `r||s`, 64 bytes, base64url. Go's `ecdsa.SignASN1` gives DER instead, and a DER signature fails in every other JWT tool.
+Each of r and s must be left-padded to 32 bytes. `big.Int.Bytes()` drops leading zeros and breaks about 1 in 128 signatures.
+The signature is checked before the claims are parsed or the expiry is read.
+This is a demo. Use a maintained JWT library in real code.
