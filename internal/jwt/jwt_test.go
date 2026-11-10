@@ -4,7 +4,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -71,8 +73,19 @@ func TestExpired(t *testing.T) {
 
 func TestBadAlg(t *testing.T) {
 	k := newKey(t)
+	body, _ := json.Marshal(claims())
 	for _, alg := range []string{"none", "HS256"} {
-		tok := b64(`{"alg":"`+alg+`","typ":"JWT"}`) + "." + b64(`{"exp":9999999999}`) + "." + b64("sig")
+		// Valid ES256 signature over the swapped header: only the alg check can reject it.
+		input := b64(`{"alg":"`+alg+`","typ":"JWT"}`) + "." + base64.RawURLEncoding.EncodeToString(body)
+		h := sha256.Sum256([]byte(input))
+		r, s, err := ecdsa.Sign(rand.Reader, k, h[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig := make([]byte, 64)
+		r.FillBytes(sig[:32])
+		s.FillBytes(sig[32:])
+		tok := input + "." + base64.RawURLEncoding.EncodeToString(sig)
 		if _, err := Verify(tok, &k.PublicKey, now); !errors.Is(err, ErrMalformed) {
 			t.Fatalf("%s: got %v", alg, err)
 		}
