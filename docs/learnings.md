@@ -29,3 +29,11 @@ The auth server binds the token to the cert it saw on the TLS connection (`r.TLS
 The client never sends a thumbprint. If it could, it could ask for a token bound to someone else's cert, and the binding would prove nothing.
 `cnf.x5t#S256` is the SHA-256 of the cert DER, so the API can recompute it from its own connection.
 Gotcha: with `RequireAndVerifyClientCert` a client with no cert never reaches the handler. The `no_client_cert` 401 is a guard for direct calls, and the handshake error shows only in `http.Server.ErrorLog`.
+
+## Task 5: resource server
+
+A valid signature and valid claims are not enough. The connection must also present the cert the token is bound to.
+The check order is: cert present, token parses, signature and expiry, audience, `cnf` present, thumbprint match.
+A token with no `cnf` is rejected. Skipping the binding check would turn it back into a plain bearer token.
+Gotcha: if a proxy terminates TLS, the resource server never sees the client cert, so it cannot check the binding.
+Either pass the cert on (and trust only that proxy) or do the check at the proxy.
