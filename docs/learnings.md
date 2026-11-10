@@ -37,3 +37,10 @@ The check order is: cert present, token parses, signature and expiry, audience, 
 A token with no `cnf` is rejected. Skipping the binding check would turn it back into a plain bearer token.
 Gotcha: if a proxy terminates TLS, the resource server never sees the client cert, so it cannot check the binding.
 Either pass the cert on (and trust only that proxy) or do the check at the proxy.
+
+## Task 6: end-to-end with podman compose
+
+Gotcha: under TLS 1.3 the client finishes its handshake before the server checks the client cert. The rejection (`expired certificate`, `certificate required`) arrives on the first read, so `verify` treats any error from `client.Do` as the rejection.
+Gotcha: `--exit-code-from` implies abort-on-container-exit, so a one-shot `ca` that exits with 0 still stops the whole stack. `service_completed_successfully` therefore failed under podman compose (docker-compose v5.6.1) as a race.
+Workaround: `ca` writes the certs, creates `/certs/.ready` and stays alive. A healthcheck on that file and `service_healthy` replace `service_completed_successfully`.
+Compose ordering teaches that "started" is not "ready". The servers need the certs before they start, so the dependency has to be on the certs existing.

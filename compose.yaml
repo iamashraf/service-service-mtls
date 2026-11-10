@@ -1,0 +1,44 @@
+name: mtlsdemo
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Containerfile
+  image: mtlsdemo:latest
+  volumes:
+    - certs:/certs:ro
+
+services:
+  ca:
+    <<: *app
+    # Stays alive after writing certs: --exit-code-from aborts the whole stack when ANY container exits.
+    command: ["sh", "-c", "ca && touch /certs/.ready && exec tail -f /dev/null"]
+    volumes:
+      - certs:/certs
+    healthcheck:
+      test: ["CMD", "test", "-f", "/certs/.ready"]
+      interval: 1s
+      retries: 30
+  authserver:
+    <<: *app
+    command: ["authserver"]
+    depends_on:
+      ca: {condition: service_healthy}
+    networks:
+      default: {aliases: [auth.demo]}
+  resource:
+    <<: *app
+    command: ["resource"]
+    depends_on:
+      ca: {condition: service_healthy}
+    networks:
+      default: {aliases: [api.demo]}
+  verify:
+    <<: *app
+    command: ["verify"]
+    depends_on:
+      authserver: {condition: service_started}
+      resource: {condition: service_started}
+
+volumes:
+  certs:
