@@ -44,3 +44,4 @@ Gotcha: under TLS 1.3 the client finishes its handshake before the server checks
 Gotcha: `--exit-code-from` implies abort-on-container-exit, so a one-shot `ca` that exits with 0 still stops the whole stack. `service_completed_successfully` therefore failed under podman compose (docker-compose v5.6.1) as a race.
 Workaround: `ca` writes the certs, creates `/certs/.ready` and stays alive. A healthcheck on that file and `service_healthy` replace `service_completed_successfully`.
 Compose ordering teaches that "started" is not "ready". The servers need the certs before they start, so the dependency has to be on the certs existing.
+Pitfall: the `certs` volume survives `down` without `-v`, so a stale `.ready` would make the healthcheck pass early. `ca` runs `rm -f /certs/.ready` first.

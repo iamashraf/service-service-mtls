@@ -12,7 +12,7 @@ services:
   ca:
     <<: *app
     # Stays alive after writing certs: --exit-code-from aborts the whole stack when ANY container exits.
-    command: ["sh", "-c", "ca && touch /certs/.ready && exec tail -f /dev/null"]
+    command: ["sh", "-c", "rm -f /certs/.ready && ca && touch /certs/.ready && exec tail -f /dev/null"]
     volumes:
       - certs:/certs
     healthcheck:
