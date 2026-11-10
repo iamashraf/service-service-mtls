@@ -22,3 +22,10 @@ A SAN (subject alternative name) is the hostname list inside a server cert. Go c
 The server uses `RequireAndVerifyClientCert`. Plain `RequireAnyClientCert` accepts any cert and skips the CA check.
 TLS 1.3 only: it drops weak legacy ciphers and encrypts the client cert during the handshake.
 Gotcha: `os.WriteFile` keeps the old file mode on overwrite, so `WriteFile` calls `Chmod` to keep keys at 0600.
+
+## Task 4: auth server
+
+The auth server binds the token to the cert it saw on the TLS connection (`r.TLS.PeerCertificates[0]`). The TLS handshake already proved the client holds that cert's private key.
+The client never sends a thumbprint. If it could, it could ask for a token bound to someone else's cert, and the binding would prove nothing.
+`cnf.x5t#S256` is the SHA-256 of the cert DER, so the API can recompute it from its own connection.
+Gotcha: with `RequireAndVerifyClientCert` a client with no cert never reaches the handler. The `no_client_cert` 401 is a guard for direct calls, and the handshake error shows only in `http.Server.ErrorLog`.
