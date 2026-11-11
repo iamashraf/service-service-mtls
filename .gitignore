@@ -3,3 +3,7 @@ certs/
 bin/
 .superpowers/
 .archify/
+api/.venv/
+__pycache__/
+.pytest_cache/
+client/target/
