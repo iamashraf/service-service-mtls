@@ -121,7 +121,18 @@ func TestEnrollRejects(t *testing.T) {
 		"server empty dns": `{"name":"a","kind":"server","dns":[]}`,
 		"unknown field":    `{"name":"a","kind":"client","x":1}`,
 		"bad json":         `nope`,
-		"oversize body":    `{"name":"a","kind":"client","pad":"` + strings.Repeat("x", 5000) + `"}`,
+		"oversize body":    `{"name":"` + strings.Repeat("a", 5000) + `","kind":"client"}`,
+		"wildcard dns":     `{"name":"a","kind":"server","dns":["*.demo"]}`,
+		"empty dns entry":  `{"name":"a","kind":"server","dns":[""]}`,
+		"bad char dns":     `{"name":"a","kind":"server","dns":["a_b.demo"]}`,
+		"11 dns":           `{"name":"a","kind":"server","dns":["` + strings.Repeat(`a.demo","`, 10) + `a.demo"]}`,
+	}
+	wantErr := map[string]string{
+		"oversize body":   "body too large",
+		"wildcard dns":    "invalid dns",
+		"empty dns entry": "invalid dns",
+		"bad char dns":    "invalid dns",
+		"11 dns":          "too many dns names",
 	}
 	for n, body := range cases {
 		t.Run(n, func(t *testing.T) {
@@ -129,6 +140,9 @@ func TestEnrollRejects(t *testing.T) {
 			var m map[string]string
 			if w.Code != 400 || json.Unmarshal(w.Body.Bytes(), &m) != nil || m["error"] == "" || m["cert_pem"] != "" {
 				t.Fatalf("status %d body %s", w.Code, w.Body)
+			}
+			if want, ok := wantErr[n]; ok && m["error"] != want {
+				t.Fatalf("error %q, want %q", m["error"], want)
 			}
 		})
 	}

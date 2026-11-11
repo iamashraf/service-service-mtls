@@ -73,6 +73,16 @@ func enroll(w http.ResponseWriter, r *http.Request, demo, rogue *pki.CA, now fun
 		badRequest(w, "invalid name")
 		return
 	}
+	if len(req.DNS) > 10 {
+		badRequest(w, "too many dns names")
+		return
+	}
+	for _, d := range req.DNS {
+		if !nameRe.MatchString(d) { // same rule as name: no wildcards, no odd chars
+			badRequest(w, "invalid dns")
+			return
+		}
+	}
 	issuer := demo
 	switch req.Issuer {
 	case "", "demo":

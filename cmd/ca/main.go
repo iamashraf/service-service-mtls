@@ -21,5 +21,6 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Print("ca listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", NewHandler(demo, rogue, time.Now)))
+	srv := &http.Server{Addr: ":8080", Handler: NewHandler(demo, rogue, time.Now), ReadHeaderTimeout: 5 * time.Second}
+	log.Fatal(srv.ListenAndServe())
 }
