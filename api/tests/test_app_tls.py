@@ -15,7 +15,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from hypercorn.asyncio import serve
-from hypercorn.config import Config
 
 from app import binding, tls
 
@@ -72,11 +71,10 @@ class Server:
 
     def __init__(self, app, certfile, keyfile, ca_file):
         self.port = free_port()
-        cfg = Config()
+        cfg = tls.Tls13Config()
         cfg.bind = [f"127.0.0.1:{self.port}"]
         cfg.certfile, cfg.keyfile, cfg.ca_certs = certfile, keyfile, ca_file
         cfg.verify_mode = ssl.CERT_REQUIRED
-        cfg.ssl_minimum_version = ssl.TLSVersion.TLSv1_3
         self.app, self.cfg = app, cfg
         self.stop = None
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -263,4 +261,16 @@ def test_no_client_cert_is_rejected(srv, pki):
     with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
         get_token(srv, pki, None)
     print("NOCERT EXC:", type(e.value).__name__, e.value)
+    assert srv.counter["n"] == before
+
+
+def test_tls12_client_is_rejected(srv, pki):
+    """A client capped at TLS 1.2 (with a valid cert) fails and no request reaches the app."""
+    before = srv.counter["n"]
+    ctx = ssl.create_default_context(cafile=pki["ca"])
+    ctx.load_cert_chain(*pki["java-writer"])
+    ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
+        httpx.Client(verify=ctx, timeout=5).post(url(srv, "/token"))
+    print("TLS12 EXC:", type(e.value).__name__, e.value)
     assert srv.counter["n"] == before

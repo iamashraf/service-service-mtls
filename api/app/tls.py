@@ -4,10 +4,12 @@ Hypercorn verifies client certs but does not put them in the ASGI scope, so a sm
 TCPServer subclass copies the peer DER into a ContextVar once per connection.
 """
 import contextvars
+import ssl
 
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from hypercorn.asyncio import run as hc_run
+from hypercorn.config import Config
 from hypercorn.asyncio.tcp_server import TCPServer
 
 _peer_der: contextvars.ContextVar[bytes | None] = contextvars.ContextVar("peer_der", default=None)
@@ -27,6 +29,16 @@ class PeerCertTCPServer(TCPServer):
         ssl_object = self.writer.get_extra_info("ssl_object")
         _peer_der.set(ssl_object.getpeercert(binary_form=True) if ssl_object else None)
         await super().run()
+
+
+class Tls13Config(Config):
+    """Hypercorn Config that refuses TLS older than 1.3 (Hypercorn hard-codes a 1.2 floor)."""
+
+    def create_ssl_context(self) -> ssl.SSLContext:
+        """Build the normal context, then raise the minimum version to TLS 1.3."""
+        ctx = super().create_ssl_context()
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        return ctx
 
 
 def install() -> None:

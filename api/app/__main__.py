@@ -8,7 +8,6 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from hypercorn.asyncio import serve
-from hypercorn.config import Config
 
 from . import enroll, tls
 from .main import create_app
@@ -24,12 +23,11 @@ def main() -> None:
         p = tmp / name
         p.touch(mode=0o600)  # the private key must not be world-readable
         p.write_text(bundle[key])
-    cfg = Config()
+    cfg = tls.Tls13Config()
     cfg.bind = ["0.0.0.0:8443"]
     cfg.certfile, cfg.keyfile, cfg.ca_certs = str(tmp / "cert.pem"), str(tmp / "key.pem"), str(tmp / "ca.pem")
     # CERT_REQUIRED: the handshake rejects clients without a cert from the demo CA
     cfg.verify_mode = ssl.CERT_REQUIRED
-    cfg.ssl_minimum_version = ssl.TLSVersion.TLSv1_3
     tls.install()
     # signing key lives only in memory; a restart invalidates old tokens
     app = create_app(ec.generate_private_key(ec.SECP256R1()))
