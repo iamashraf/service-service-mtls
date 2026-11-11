@@ -54,11 +54,15 @@ public final class Main {
                 && java.util.Objects.equals(reason, res.reason()), act);
     }
 
-    /** Matches only when the exception chain holds an SSLException (refused/timeout/unknown host do not count). */
+    /**
+     * Matches an SSLException in the chain, or a plain IOException "Connection reset" or "EOF reached while reading": with TLS 1.3 the client
+     * finishes its handshake first, so the server's reject can surface as a reset. Refused/timeout/unknown host do not match.
+     */
     private static Row tlsRejected(String name, Api.Result res) {
         boolean ok = false;
         for (Throwable t = res.error(); t != null; t = t.getCause()) {
             if (t instanceof javax.net.ssl.SSLException) ok = true;
+            if (t.getClass() == java.io.IOException.class && String.valueOf(t.getMessage()).matches(".*(Connection reset|EOF reached while reading).*")) ok = true;
         }
         String act = res.error() != null ? describe(res.error()) : "HTTP " + res.status() + " (not rejected)";
         return new Row(name, "TLS handshake rejected", ok, act);
