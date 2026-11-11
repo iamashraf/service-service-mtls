@@ -11,9 +11,12 @@ import (
 	"mtlsdemo/internal/jwt"
 )
 
+// ttl is the access token lifetime in seconds.
 const ttl = 300 // seconds
 
-// NewHandler serves POST /token. now is injectable so tests control exp.
+// NewHandler returns a handler for POST /token. It issues a JWT bound to the
+// thumbprint of the client cert on the TLS connection, never one named in the request.
+// now is injectable so tests control exp.
 func NewHandler(key *ecdsa.PrivateKey, now func() time.Time) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {

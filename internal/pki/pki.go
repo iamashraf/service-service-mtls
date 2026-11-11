@@ -17,15 +17,18 @@ import (
 	"time"
 )
 
+// CA is a demo certificate authority: its certificate and signing key.
 type CA struct {
 	Cert *x509.Certificate
 	Key  *ecdsa.PrivateKey
 }
 
+// serial returns a random 128-bit certificate serial number.
 func serial() (*big.Int, error) {
 	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 }
 
+// NewCA returns a new self-signed P-256 CA named cn, valid for 24 hours.
 func NewCA(cn string) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -110,6 +113,7 @@ func NewSigningKey() (keyPEM, pubPEM []byte, err error) {
 		pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: p}), nil
 }
 
+// WriteFile writes data to dir/name. Files ending in .key get mode 0600, others 0644.
 func WriteFile(dir, name string, data []byte) error {
 	mode := os.FileMode(0o644)
 	if strings.HasSuffix(name, ".key") {
@@ -122,6 +126,7 @@ func WriteFile(dir, name string, data []byte) error {
 	return os.Chmod(p, mode) // WriteFile keeps the old mode when overwriting
 }
 
+// loadPool returns a cert pool holding the CA certificate in dir/ca.pem.
 func loadPool(dir string) (*x509.CertPool, error) {
 	b, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	if err != nil {
@@ -134,6 +139,8 @@ func loadPool(dir string) (*x509.CertPool, error) {
 	return p, nil
 }
 
+// LoadServerTLS returns a TLS 1.3 server config using dir/name.pem and dir/name.key.
+// It requires a client cert signed by the CA in dir/ca.pem.
 func LoadServerTLS(dir, name string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, name+".pem"), filepath.Join(dir, name+".key"))
 	if err != nil {
@@ -151,6 +158,8 @@ func LoadServerTLS(dir, name string) (*tls.Config, error) {
 	}, nil
 }
 
+// LoadClientTLS returns a TLS 1.3 client config that presents dir/name.pem.
+// It trusts only the CA in dir/ca.pem and checks the server cert against serverName.
 func LoadClientTLS(dir, name, serverName string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, name+".pem"), filepath.Join(dir, name+".key"))
 	if err != nil {
@@ -168,6 +177,7 @@ func LoadClientTLS(dir, name, serverName string) (*tls.Config, error) {
 	}, nil
 }
 
+// readPEM returns the first PEM block of dir/name.
 func readPEM(dir, name string) (*pem.Block, error) {
 	b, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
@@ -180,6 +190,7 @@ func readPEM(dir, name string) (*pem.Block, error) {
 	return blk, nil
 }
 
+// LoadSigningKey returns the ECDSA private key in dir/signing.key.
 func LoadSigningKey(dir string) (*ecdsa.PrivateKey, error) {
 	blk, err := readPEM(dir, "signing.key")
 	if err != nil {
@@ -196,6 +207,7 @@ func LoadSigningKey(dir string) (*ecdsa.PrivateKey, error) {
 	return ek, nil
 }
 
+// LoadSigningPub returns the ECDSA public key in dir/signing.pub.
 func LoadSigningPub(dir string) (*ecdsa.PublicKey, error) {
 	blk, err := readPEM(dir, "signing.pub")
 	if err != nil {

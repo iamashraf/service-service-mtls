@@ -13,7 +13,9 @@ import (
 	"mtlsdemo/internal/jwt"
 )
 
-// NewHandler serves GET /data. now is injectable so tests control expiry.
+// NewHandler returns a handler for GET /data. It allows a request only if the bearer token
+// is signed, unexpired, for aud, and bound to the cert on the TLS connection.
+// now is injectable so tests control expiry.
 func NewHandler(pub *ecdsa.PublicKey, aud string, now func() time.Time) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/data", func(w http.ResponseWriter, r *http.Request) {

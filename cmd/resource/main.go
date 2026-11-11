@@ -1,3 +1,4 @@
+// Command resource serves GET /data over mTLS on :8443 to callers holding a bound token.
 package main
 
 import (
@@ -9,6 +10,7 @@ import (
 	"mtlsdemo/internal/pki"
 )
 
+// main loads the certs from CERTS_DIR (default /certs) and serves until it fails.
 func main() {
 	dir := os.Getenv("CERTS_DIR")
 	if dir == "" {

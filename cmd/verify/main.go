@@ -1,4 +1,4 @@
-// verify runs the five demo scenarios against the live servers and prints a table.
+// Command verify runs the five demo scenarios against the live servers and prints a table.
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"mtlsdemo/internal/pki"
 )
 
+// authURL and apiURL are the token and resource endpoints the scenarios call.
 const (
 	authURL = "https://auth.demo:8443/token"
 	apiURL  = "https://api.demo:8443/data"
@@ -41,6 +42,8 @@ func matches(expected, actual string) bool {
 	return actual == expected || (strings.HasPrefix(actual, "tls rejected: ") && strings.Contains(actual, expected))
 }
 
+// clientFor returns an mTLS client that presents the cert called name and expects server.
+// It exits the process if the cert cannot be loaded.
 func clientFor(dir, name, server string) *http.Client {
 	cfg, err := pki.LoadClientTLS(dir, name, server)
 	if err != nil {
@@ -69,6 +72,7 @@ func do(c *http.Client, req *http.Request) (int, []byte, error) {
 	return 0, nil, err
 }
 
+// getToken requests an access token from the auth server and returns it.
 func getToken(c *http.Client) (string, error) {
 	req, _ := http.NewRequest("POST", authURL, nil)
 	st, b, err := do(c, req)
@@ -84,6 +88,7 @@ func getToken(c *http.Client) (string, error) {
 	return t.AccessToken, nil
 }
 
+// call sends GET /data with tok as a bearer token (none if empty) and returns the classified result.
 func call(c *http.Client, tok string) string {
 	req, _ := http.NewRequest("GET", apiURL, nil)
 	if tok != "" {
@@ -93,6 +98,7 @@ func call(c *http.Client, tok string) string {
 	return classify(st, err, b)
 }
 
+// main runs the five scenarios, prints the table and exits 1 if any row does not match.
 func main() {
 	dir := os.Getenv("CERTS_DIR")
 	if dir == "" {

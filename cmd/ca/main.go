@@ -10,6 +10,8 @@ import (
 	"mtlsdemo/internal/pki"
 )
 
+// main generates the CA, the leaf certs and the signing key pair.
+// The rogue CA and its client cert are written, but the rogue CA cert is not.
 func main() {
 	dir := os.Getenv("CERTS_DIR")
 	if dir == "" {
