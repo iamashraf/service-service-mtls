@@ -59,24 +59,23 @@ sequenceDiagram
 podman compose up --build --exit-code-from verify
 ```
 
-`verify` prints one row per scenario. MATCH is `true` when the result equals the expected one. The exit code is 0 only if all five rows match.
+`verify` prints one row per scenario. MATCH is `true` when the result equals the expected text (for the two TLS rows, when the error contains it). The exit code is 0 only if all five rows match.
 
 Clean up with `podman compose down -v`. Certs are fresh on every run, so the thumbprints in this guide differ from yours.
 
 ## Scenario walk-through
 
-All output below comes from a real run. Timestamps and addresses are trimmed.
+All output below comes from a real run. The log date prefix is trimmed.
 
 ### 1. Happy path
 
 `client-a` gets a token and calls the API.
 
 ```
-authserver-1  | cn=client-a thumb=jZfEKqAO decision=allow reason=ok
+authserver-1  | cn="client-a" thumb=jZfEKqAO decision=allow reason=ok
 resource-1    | cn="client-a" thumb=jZfEKqAO decision=allow reason=ok
 verify-1      | 1 client-a, own token     200 ok                   true   200 ok
 ```
-
 
 ### 2. Stolen token
 
@@ -102,7 +101,7 @@ verify-1      | 3 token without cnf       401 no_cnf               true   401 no
 
 ```
 resource-1    | http: TLS handshake error from 10.89.1.5:56508: tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-11-11T00:17:21Z is after 2026-11-10T00:17:21Z
-verify-1      | 4 expired client cert     tls rejected             true   tls rejected: Get "https://api.demo:8443/data": remote error: tls: expired certificate
+verify-1      | 4 expired client cert     expired certificate     true   tls rejected: Get "https://api.demo:8443/data": remote error: tls: expired certificate
 ```
 
 ### 5. Rogue-CA cert
@@ -111,7 +110,7 @@ verify-1      | 4 expired client cert     tls rejected             true   tls re
 
 ```
 resource-1    | http: TLS handshake error from 10.89.1.5:56522: tls: client didn't provide a certificate
-verify-1      | 5 rogue-CA client cert    tls rejected             true   tls rejected: Get "https://api.demo:8443/data": remote error: tls: certificate required
+verify-1      | 5 rogue-CA client cert    certificate required    true   tls rejected: Get "https://api.demo:8443/data": remote error: tls: certificate required
 ```
 
 The reason: the server lists the CAs it trusts in its CertificateRequest. The Go client presents a cert only if a CA on that list issued it. The rogue cert's issuer is not listed, so the client sends no cert at all. The server logs `client didn't provide a certificate`.
