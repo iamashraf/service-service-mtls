@@ -1,132 +1,188 @@
-# Guide
+# Guide: certificate-bound tokens with mutual TLS
 
 ## What this is
 
-A runnable demo of certificate-bound access tokens (RFC 8705). The auth server ties each token to the client certificate that asked for it. The API accepts the token only on a connection that presents that same certificate.
+This demo shows AuthN and AuthZ between services. A Java client calls a Python API over mutual TLS (mTLS). The API issues a token that only works on the cert it was issued to.
 
-One command runs five scenarios against real servers. A stolen token fails, an unbound token fails and a bad certificate never connects.
+A real run proves three things: a stolen token fails on another cert, a client without the right scope gets 403, and a cert from an unknown CA never reaches the API code.
 
-## The problem with bearer tokens
+## AuthN vs AuthZ, 401 vs 403
 
-A bearer token works for whoever holds it. If an attacker copies it from a log, the API cannot tell the attacker from the real client. The stolen token works from anywhere until it expires.
+AuthN (authentication) is who you are. Here the client cert answers it. AuthZ (authorization) is what you may do. Here the token `scope` answers it.
 
-## mTLS in 60 seconds
+| Status | Meaning | Example reason |
+|---|---|---|
+| 401 | Identity or binding failed | `thumbprint_mismatch` |
+| 403 | Identity is known, action not allowed | `insufficient_scope` |
 
-In plain TLS only the server shows a certificate. In mutual TLS (mTLS) the client shows one too. The handshake proves the client holds the private key for that certificate.
+## Where the certs come from
 
-The server now knows which certificate sits on the other end. A CN is only text inside the cert, so the binding below uses the certificate itself.
+The mock CA is a Go service. A service calls `POST /enroll` with a name and a kind (`server` or `client`). The CA replies with a cert, a private key and the CA cert.
+
+```json
+{"name": "java-writer", "kind": "client", "dns": [], "issuer": "demo"}
+```
+
+This is a mock. The endpoint has no authentication, runs over plain HTTP and returns the private key. A real CA works differently:
+
+- The service makes its own key and sends only a CSR (certificate signing request).
+- The CA checks proof of identity before it signs.
+- The private key never leaves the service.
+
+The `issuer: "rogue"` option signs with a second CA. The demo uses it to make a cert the API must reject.
 
 ## Binding a token to a cert
 
-The token carries a `cnf` (confirmation) claim. Its `x5t#S256` member is the SHA-256 of the client certificate DER bytes, base64url encoded with no padding.
+The API signs an ES256 JWT (a signed token). It carries a `cnf` claim (confirmation) with the SHA-256 thumbprint of the client cert:
 
 ```json
-{"iss":"https://auth.demo","sub":"client-a","aud":"api.demo","exp":1789000000,
- "cnf":{"x5t#S256":"jZfEKqAO..."}}
+{
+  "iss": "https://api.demo", "sub": "java-writer", "aud": "api.demo",
+  "exp": 1760000300, "scope": "orders:read orders:write",
+  "cnf": {"x5t#S256": "<base64url SHA-256 of the cert DER>"}
+}
 ```
 
-The auth server takes the thumbprint from the TLS connection (`r.TLS.PeerCertificates[0]`). It never reads it from the request. If the client could name the thumbprint, it could ask for a token bound to someone else's cert, and the binding would prove nothing.
+On every call the server takes the thumbprint from the TLS connection and compares it with `cnf`. A token used on a different cert fails.
 
-The API recomputes the thumbprint from its own connection and compares. A thief with the token but a different key fails that comparison.
+Scopes never come from the request. The server looks up the cert CN in its policy table:
+
+| CN | Scopes |
+|---|---|
+| `java-writer` | `orders:read orders:write` |
+| `java-reader` | `orders:read` |
+
+A CN with no entry gets 403 `no_policy` at `/token`.
+
+On `/orders` the checks run in this order. The first failure ends the request. Only the last one is a 403:
+
+1. Peer cert present (`no_client_cert`, 401)
+2. Bearer token parses (`malformed`, 401)
+3. Signature and expiry (`bad_signature`, `expired`, 401)
+4. Audience (`bad_audience`, 401)
+5. `cnf` present (`no_cnf`, 401)
+6. Thumbprint matches (`thumbprint_mismatch`, 401)
+7. Scope allows the call (`insufficient_scope`, 403)
 
 ## The pieces
 
-| Service | Host name | Role |
-|---|---|---|
-| `ca` | | Writes the CA, client certs and signing key to a shared volume |
-| `authserver` | `auth.demo` | Issues ES256 tokens bound to the caller's cert |
-| `resource` | `api.demo` | Serves `/data` after checking the token and the cert |
-| `verify` | | Plays the clients, runs five scenarios and sets the exit code |
+| Service | Stack | Address | Job |
+|---|---|---|---|
+| ca | Go | `ca.demo:8080` | Issues certs at `/enroll` |
+| api | FastAPI on Hypercorn | `api.demo:8443` | Requires a client cert, issues and checks tokens |
+| client | Java 25 | none | Runs the scenarios and sets the exit code |
 
 ```mermaid
 sequenceDiagram
     participant client
-    participant auth.demo
+    participant ca.demo
     participant api.demo
-    client->>auth.demo: mTLS handshake with client cert
-    client->>auth.demo: POST /token
-    auth.demo->>auth.demo: thumbprint from the connection cert
-    auth.demo-->>client: token with cnf x5t#S256
-    client->>api.demo: mTLS handshake with the same cert
-    client->>api.demo: GET /data with Bearer token
-    api.demo->>api.demo: verify token, compare cnf to connection cert
-    api.demo-->>client: 200 or 401 with a reason
+    client->>ca.demo: POST /enroll
+    ca.demo-->>client: cert, key, CA cert
+    client->>api.demo: POST /token over mTLS
+    api.demo-->>client: token bound to the cert
+    client->>api.demo: GET /orders with Bearer token
+    api.demo-->>client: 200
 ```
+
+The api also enrolls at startup to get its own server cert.
 
 ## Run it
 
 ```sh
-podman compose up --build --exit-code-from verify
+podman compose up --build --exit-code-from client
 ```
 
-`verify` prints one row per scenario. MATCH is `true` when the result equals the expected text (for the two TLS rows, when the error contains it). The exit code is 0 only if all five rows match.
+Success: every row of the client table says `yes` in the MATCH column and the exit code is 0.
 
-Clean up with `podman compose down -v`. Certs are fresh on every run, so the thumbprints in this guide differ from yours.
+```sh
+podman compose down -v
+```
+
+Thumbprints differ on every run because the certs are fresh.
 
 ## Scenario walk-through
 
-All output below comes from a real run. The log date prefix is trimmed.
+This output comes from a real run. The `api` log lines are trimmed to their text.
 
-### 1. Happy path
-
-`client-a` gets a token and calls the API.
-
-```
-authserver-1  | cn="client-a" thumb=jZfEKqAO decision=allow reason=ok
-resource-1    | cn="client-a" thumb=jZfEKqAO decision=allow reason=ok
-verify-1      | 1 client-a, own token     200 ok                   true   200 ok
-```
-
-### 2. Stolen token
-
-`client-b` replays `client-a`'s token. The signature and claims are valid. The connection cert is not the bound one.
-
-```
-resource-1    | cn="client-b" thumb=e-3Vqx7m decision=deny reason=thumbprint_mismatch
-verify-1      | 2 client-b replays token  401 thumbprint_mismatch  true   401 thumbprint_mismatch
+```text
+SCENARIO                         EXPECTED                   MATCH  ACTUAL
+1 writer GET /orders             200                        yes    200
+1 writer POST /orders            201                        yes    201
+2 reader POST /orders            403 insufficient_scope     yes    403 insufficient_scope
+2 reader GET /orders             200                        yes    200
+3 reader replays writer token    401 thumbprint_mismatch    yes    401 thumbprint_mismatch
+4 rogue cert                     TLS handshake rejected     yes    java.io.IOException: Connection reset
+4 control: writer still served   200                        yes    200
 ```
 
-### 3. Unbound token
+### 1. Writer reads and writes
 
-`verify` signs a token with the real signing key but leaves out `cnf`. The API rejects it. Accepting it would turn the token back into a bearer token.
+The writer gets a token, lists orders and adds one. The API logs three allows: `/token`, `GET`, `POST`.
 
-```
-resource-1    | cn="client-a" thumb=jZfEKqAO decision=deny reason=no_cnf
-verify-1      | 3 token without cnf       401 no_cnf               true   401 no_cnf
-```
-
-### 4. Expired cert
-
-`client-expired` has a backdated `NotAfter`. The server rejects it in the handshake.
-
-```
-resource-1    | http: TLS handshake error from 10.89.1.5:56508: tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-11-11T00:17:21Z is after 2026-11-10T00:17:21Z
-verify-1      | 4 expired client cert     expired certificate      true   tls rejected: Get "https://api.demo:8443/data": remote error: tls: expired certificate
+```text
+INFO:app:cn='java-writer' thumbprint=5EeJsK7v decision=allow reason=ok
+INFO:app:cn='java-writer' thumbprint=5EeJsK7v decision=allow reason=ok
+INFO:app:cn='java-writer' thumbprint=5EeJsK7v decision=allow reason=ok
 ```
 
-### 5. Rogue-CA cert
+### 2. Reader cannot write
 
-`client-rogue` is signed by a second CA that the servers do not trust. The client side shows `certificate required`.
+The reader's token has only `orders:read`. Its `POST` passes AuthN and fails AuthZ. The log shows `/token`, the denied `POST`, then a `GET` that succeeds.
 
+```text
+INFO:app:cn='java-reader' thumbprint=MviyHwk5 decision=allow reason=ok
+INFO:app:cn='java-reader' thumbprint=MviyHwk5 decision=deny reason=insufficient_scope
+INFO:app:cn='java-reader' thumbprint=MviyHwk5 decision=allow reason=ok
 ```
-resource-1    | http: TLS handshake error from 10.89.1.5:56522: tls: client didn't provide a certificate
-verify-1      | 5 rogue-CA client cert    certificate required     true   tls rejected: Get "https://api.demo:8443/data": remote error: tls: certificate required
+
+### 3. Replayed token
+
+The reader sends the writer's token on its own connection. The signature is valid. The `cnf` thumbprint is the writer's, so the check fails.
+
+```text
+INFO:app:cn='java-reader' thumbprint=MviyHwk5 decision=deny reason=thumbprint_mismatch
 ```
 
-The reason: the server lists the CAs it trusts in its CertificateRequest. The Go client presents a cert only if a CA on that list issued it. The rogue cert's issuer is not listed, so the client sends no cert at all. The server logs `client didn't provide a certificate`.
+### 4. Rogue-CA cert
+
+The client enrolls `java-rogue` with `issuer: "rogue"`. The API trusts only the demo CA, so the TLS handshake fails. The API logs nothing, because no handler ran.
+
+The JDK does not even send this cert. Its issuer is not in the CA list the server offers. The client sees `Connection reset`. Some runs show `EOF reached while reading`.
+
+The control call proves the API was still up. The writer calls again and gets 200:
+
+```text
+INFO:app:cn='java-writer' thumbprint=5EeJsK7v decision=allow reason=ok
+```
 
 ## Gotchas we hit
 
-- **TLS 1.3 rejections arrive late.** The client finishes its handshake before the server checks the client cert. The error (`expired certificate`, `certificate required`) shows up on the first read, so `verify` treats any error from `client.Do` as the rejection.
-- **Check order on the resource server.** Cert present, token parses, signature and expiry, audience, `cnf` present, thumbprint match.
-- **"Started" is not "ready".** The servers need the certs before they start. `ca` creates `/certs/.ready` and a healthcheck on that file gates them with `service_healthy`.
-- **`--exit-code-from` aborts on any exit.** A one-shot `ca` that exits 0 still stops the stack. So `ca` stays alive.
-- **Stale `.ready` on a reused volume.** The `certs` volume survives `down` without `-v`. `ca` runs `rm -f /certs/.ready` first so the healthcheck cannot pass early.
+### The client cert is not in the ASGI scope
 
-## What this does not cover
+Python ASGI servers do not hand the client cert to the app. `app/tls.py` subclasses Hypercorn's `TCPServer`. After the handshake it copies the peer cert into a `ContextVar`. The handler reads it from there.
 
-- **Key rotation.** One signing key, never replaced.
-- **Revocation.** There is no way to cancel a token or a cert before it expires.
-- **JWKS.** The resource server reads the public key from the shared volume. A real deployment fetches it from a JWKS endpoint.
-- **TLS-terminating proxies.** If a proxy ends the TLS connection, the resource server never sees the client cert and cannot check the binding. Pass the cert on and trust only that proxy, or check at the proxy.
-- **Key isolation.** Every service can read every file in the shared volume, including `signing.key` and all client keys. That is a demo shortcut.
+A test runs concurrent connections and checks that no cert leaks between them. This relies on Hypercorn internals, so the version is pinned.
+
+### Hypercorn allows TLS 1.2
+
+Hypercorn sets a TLS 1.2 floor. A `Config` subclass raises `minimum_version` to TLS 1.3. A test shows a TLS 1.2 client is rejected and no request reaches the app.
+
+### TLS 1.3 shows rejection on the first read
+
+In TLS 1.3 the client finishes its handshake before the server checks the client cert. The client sees the rejection on its first read. So scenario 4 accepts a reset or an EOF as well as an `SSLException`.
+
+### Rejected handshakes are not logged
+
+A failed handshake is never a request, so the API logs nothing. Read the client output instead.
+
+### Started is not ready
+
+Compose `service_started` only means the process began. The api calls the CA at startup, so it waits for the CA healthcheck (`service_healthy`).
+
+## Demo shortcuts and what this does not cover
+
+- `/enroll` is unauthenticated, uses plain HTTP and returns the private key.
+- Apps trust the CA cert from that same call (trust on first use).
+- There is no rotation or revocation. Certs last 24 hours and tokens 300 seconds.
+- A TLS-terminating proxy in front of the API would hide the client cert. The binding would then break.
