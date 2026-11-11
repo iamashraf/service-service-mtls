@@ -1,45 +1,30 @@
 name: mtlsdemo
 
-x-app: &app
-  build:
-    context: .
-    dockerfile: Containerfile
-  image: mtlsdemo:latest
-  volumes:
-    - certs:/certs:ro
-
+# --exit-code-from aborts the stack when any container exits, so ca and api stay running.
 services:
   ca:
-    <<: *app
-    # Stays alive after writing certs: --exit-code-from aborts the whole stack when ANY container exits.
-    stop_grace_period: 1s # PID 1 is tail, which ignores SIGTERM
-    command: ["sh", "-c", "rm -f /certs/.ready && ca && touch /certs/.ready && exec tail -f /dev/null"]
-    volumes:
-      - certs:/certs
+    build:
+      context: .
+      dockerfile: Containerfile
+    command: ["ca"]
     healthcheck:
-      test: ["CMD", "test", "-f", "/certs/.ready"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 1s
       retries: 30
-  authserver:
-    <<: *app
-    command: ["authserver"]
-    depends_on:
-      ca: {condition: service_healthy}
     networks:
-      default: {aliases: [auth.demo]}
-  resource:
-    <<: *app
-    command: ["resource"]
+      default: {aliases: [ca.demo]}
+  api:
+    build: {context: ./api, dockerfile: Containerfile}
+    environment:
+      CA_URL: http://ca.demo:8080
     depends_on:
       ca: {condition: service_healthy}
     networks:
       default: {aliases: [api.demo]}
-  verify:
-    <<: *app
-    command: ["verify"]
+  client:
+    build: {context: ./client, dockerfile: Containerfile}
+    environment:
+      CA_URL: http://ca.demo:8080
+      API_URL: https://api.demo:8443
     depends_on:
-      authserver: {condition: service_started}
-      resource: {condition: service_started}
-
-volumes:
-  certs:
+      api: {condition: service_started}
