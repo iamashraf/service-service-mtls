@@ -23,7 +23,7 @@ func NewHandler(key *ecdsa.PrivateKey, now func() time.Time) http.Handler {
 		}
 		// A nil cert would panic in Thumbprint, so check before use.
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-			log.Printf("cn=- thumb=- decision=deny reason=no_client_cert")
+			log.Printf("cn=%q thumb=- decision=deny reason=no_client_cert", "-")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{"error": "no_client_cert"})
@@ -41,11 +41,11 @@ func NewHandler(key *ecdsa.PrivateKey, now func() time.Time) http.Handler {
 			Cnf: &jwt.Cnf{X5tS256: thumb}, // binds the token to this cert
 		}, key)
 		if err != nil {
-			log.Printf("cn=%s thumb=%.8s decision=error reason=sign_failed", cert.Subject.CommonName, thumb)
+			log.Printf("cn=%q thumb=%.8s decision=error reason=sign_failed", cert.Subject.CommonName, thumb)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("cn=%s thumb=%.8s decision=allow reason=ok", cert.Subject.CommonName, thumb)
+		log.Printf("cn=%q thumb=%.8s decision=allow reason=ok", cert.Subject.CommonName, thumb)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"access_token": tok, "token_type": "Bearer", "expires_in": ttl})
 	})
