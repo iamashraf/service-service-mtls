@@ -1,0 +1,78 @@
+package demo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Runs the four demo scenarios against the API and prints a result table. */
+public final class Main {
+    private record Row(String scenario, String expected, boolean match, String actual) {}
+
+    private Main() {}
+
+    /** Enrolls identities, runs the scenarios, prints the table; exit code 0 only if all match. */
+    public static void main(String[] args) {
+        String ca = System.getenv().getOrDefault("CA_URL", "http://ca.demo:8080");
+        String url = System.getenv().getOrDefault("API_URL", "https://api.demo:8443");
+        List<Row> rows = new ArrayList<>();
+        try {
+            Identity w = Enroller.enroll(ca, "java-writer", "client", "demo");
+            Identity r = Enroller.enroll(ca, "java-reader", "client", "demo");
+            Identity x = Enroller.enroll(ca, "java-rogue", "client", "rogue");
+            Api writer = new Api(Tls.contextFor(w), url);
+            Api reader = new Api(Tls.contextFor(r), url);
+            Api rogue = new Api(Tls.contextFor(x), url);
+
+            // 1: writer may read and write. POST /orders replies 201 (created).
+            String wt = Api.accessToken(writer.token());
+            rows.add(check("1 writer GET /orders", 200, null, writer.get(wt)));
+            rows.add(check("1 writer POST /orders", 201, null, writer.post(wt, "book")));
+
+            // 2: reader has no write scope (403), but can still read.
+            String rt = Api.accessToken(reader.token());
+            rows.add(check("2 reader POST /orders", 403, "insufficient_scope", reader.post(rt, "book")));
+            rows.add(check("2 reader GET /orders", 200, null, reader.get(rt)));
+
+            // 3: a token stolen from the writer is bound to the writer's cert, so the reader's cert fails.
+            rows.add(check("3 reader replays writer token", 401, "thumbprint_mismatch", reader.get(wt)));
+
+            // 4: rogue-issued cert must be rejected in the TLS layer.
+            rows.add(tlsRejected("4 rogue cert", rogue.token()));
+        } catch (Exception e) {
+            System.err.println("FAILED: " + e.getMessage() + (e.getCause() != null ? " (" + e.getCause() + ")" : ""));
+            System.exit(1);
+        }
+        print(rows);
+        System.exit(rows.stream().allMatch(Row::match) ? 0 : 1);
+    }
+
+    /** Compares status and error reason exactly. */
+    private static Row check(String name, int status, String reason, Api.Result res) {
+        String exp = status + (reason == null ? "" : " " + reason);
+        String act = res.error() != null ? describe(res.error())
+                : res.status() + (res.reason() == null ? "" : " " + res.reason());
+        return new Row(name, exp, res.error() == null && res.status() == status
+                && java.util.Objects.equals(reason, res.reason()), act);
+    }
+
+    /** Matches only when the exception chain holds an SSLException (refused/timeout/unknown host do not count). */
+    private static Row tlsRejected(String name, Api.Result res) {
+        boolean ok = false;
+        for (Throwable t = res.error(); t != null; t = t.getCause()) {
+            if (t instanceof javax.net.ssl.SSLException) ok = true;
+        }
+        String act = res.error() != null ? describe(res.error()) : "HTTP " + res.status() + " (not rejected)";
+        return new Row(name, "TLS handshake rejected", ok, act);
+    }
+
+    /** Exception class and message. */
+    private static String describe(Throwable t) {
+        return t.getClass().getName() + ": " + t.getMessage();
+    }
+
+    /** Prints the SCENARIO / EXPECTED / MATCH / ACTUAL table. */
+    private static void print(List<Row> rows) {
+        String f = "%-32s %-26s %-6s %s%n";
+        System.out.printf(f, "SCENARIO", "EXPECTED", "MATCH", "ACTUAL");
+        for (Row r : rows) System.out.printf(f, r.scenario(), r.expected(), r.match() ? "yes" : "NO", r.actual());
+    }
+}
