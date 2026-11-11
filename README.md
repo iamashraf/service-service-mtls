@@ -47,4 +47,3 @@ Certs and keys live in a named volume and are for this demo only.
 
 - [docs/runtime-architecture.html](docs/runtime-architecture.html): interactive runtime architecture diagram
 - [docs/guide.md](docs/guide.md): how it works, scenario by scenario
-- [docs/learnings.md](docs/learnings.md): gotchas found while building it
