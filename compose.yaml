@@ -12,6 +12,7 @@ services:
   ca:
     <<: *app
     # Stays alive after writing certs: --exit-code-from aborts the whole stack when ANY container exits.
+    stop_grace_period: 1s # PID 1 is tail, which ignores SIGTERM
     command: ["sh", "-c", "rm -f /certs/.ready && ca && touch /certs/.ready && exec tail -f /dev/null"]
     volumes:
       - certs:/certs
