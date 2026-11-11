@@ -23,3 +23,17 @@ func TestClassify(t *testing.T) {
 		}
 	}
 }
+
+func TestMatches(t *testing.T) {
+	rejected := classify(0, errors.New("remote error: tls: expired certificate"), nil)
+	refused := classify(0, errors.New("dial tcp: connection refused"), nil)
+	if !matches("expired certificate", rejected) {
+		t.Error("tls error should match its text")
+	}
+	if matches("expired certificate", refused) || matches("certificate required", rejected) {
+		t.Error("wrong or unrelated error must not match")
+	}
+	if matches("401 no_cnf", "401 no_cnf_extra") || !matches("200 ok", "200 ok") {
+		t.Error("status rows must match exactly")
+	}
+}

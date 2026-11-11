@@ -35,6 +35,12 @@ func classify(status int, err error, body []byte) string {
 	return fmt.Sprintf("%d %s", status, e.Error)
 }
 
+// matches is exact for status rows and a substring check for transport errors,
+// so a connection-refused error cannot pass for a TLS rejection.
+func matches(expected, actual string) bool {
+	return actual == expected || (strings.HasPrefix(actual, "tls rejected: ") && strings.Contains(actual, expected))
+}
+
 func clientFor(dir, name, server string) *http.Client {
 	cfg, err := pki.LoadClientTLS(dir, name, server)
 	if err != nil {
@@ -118,14 +124,14 @@ func main() {
 		{"1 client-a, own token", "200 ok", call(a, tok)},
 		{"2 client-b replays token", "401 thumbprint_mismatch", call(b, tok)},
 		{"3 token without cnf", "401 no_cnf", call(a, unbound)},
-		{"4 expired client cert", "tls rejected", call(expired, tok)},
-		{"5 rogue-CA client cert", "tls rejected", call(rogue, tok)},
+		{"4 expired client cert", "expired certificate", call(expired, tok)},
+		{"5 rogue-CA client cert", "certificate required", call(rogue, tok)},
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "SCENARIO\tEXPECTED\tMATCH\tACTUAL (incl. server reason)")
 	fail := false
 	for _, r := range rows {
-		ok := strings.HasPrefix(r.actual, r.expected)
+		ok := matches(r.expected, r.actual)
 		if !ok {
 			fail = true
 		}
