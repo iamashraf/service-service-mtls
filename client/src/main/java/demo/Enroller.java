@@ -7,6 +7,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -27,9 +28,10 @@ public final class Enroller {
         String body = JSON.writeValueAsString(Map.of(
                 "name", name, "kind", kind, "dns", new String[0], "issuer", issuer));
         HttpRequest req = HttpRequest.newBuilder(URI.create(caUrl + "/enroll"))
+                .timeout(Duration.ofSeconds(5))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build();
-        HttpClient http = HttpClient.newHttpClient();
+        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         for (int attempt = 1; ; attempt++) {
             try {
                 HttpResponse<String> r = http.send(req, HttpResponse.BodyHandlers.ofString());

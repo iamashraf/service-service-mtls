@@ -5,8 +5,10 @@ import java.util.List;
 
 /** Runs the four demo scenarios against the API and prints a result table. */
 public final class Main {
+    /** One result line of the table. */
     private record Row(String scenario, String expected, boolean match, String actual) {}
 
+    /** Not instantiable; only main() is used. */
     private Main() {}
 
     /** Enrolls identities, runs the scenarios, prints the table; exit code 0 only if all match. */
@@ -37,7 +39,10 @@ public final class Main {
 
             // 4: rogue-issued cert must be rejected in the TLS layer.
             rows.add(tlsRejected("4 rogue cert", rogue.token()));
+            // Control: a dropped connection alone must not pass scenario 4; the API must still serve the writer.
+            rows.add(check("4 control: writer still served", 200, null, writer.get(wt)));
         } catch (Exception e) {
+            print(rows);
             System.err.println("FAILED: " + e.getMessage() + (e.getCause() != null ? " (" + e.getCause() + ")" : ""));
             System.exit(1);
         }
@@ -55,8 +60,9 @@ public final class Main {
     }
 
     /**
-     * Matches an SSLException in the chain, or a plain IOException "Connection reset" or "EOF reached while reading": with TLS 1.3 the client
-     * finishes its handshake first, so the server's reject can surface as a reset. Refused/timeout/unknown host do not match.
+     * Matches an SSLException in the chain, or a plain IOException "Connection reset" or
+     * "EOF reached while reading". With TLS 1.3 the client finishes its handshake first,
+     * so the server's reject can surface as a reset. Refused/timeout/unknown host do not match.
      */
     private static Row tlsRejected(String name, Api.Result res) {
         boolean ok = false;
