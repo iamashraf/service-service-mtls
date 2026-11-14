@@ -11,6 +11,6 @@ jobs:
         with: {go-version-file: go.mod, cache: false}
       - run: go vet ./... && go test ./...
       - uses: actions/setup-python@v7
-        with: {python-version: "3.12"}
+        with: {python-version: "3.14"}
       - run: pip install -r requirements-dev.txt && pytest -q
         working-directory: api

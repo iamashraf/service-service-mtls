@@ -11,7 +11,7 @@ One command starts a Go certificate authority, a FastAPI server and a Java 25 cl
 | PKI and mutual TLS | [Go CA](cmd/ca/handler.go), [TLS 1.3 server setup](api/app/tls.py) |
 | Certificate-bound tokens ([RFC 8705](https://www.rfc-editor.org/rfc/rfc8705)) | [token and thumbprint code](api/app/tokens.py) |
 | Authorization design | [policy table](api/app/policy.py), [ordered checks](api/app/guard.py) |
-| Three languages in one system | Go, Python 3.12, Java 25 |
+| Three languages in one system | Go, Python 3.14, Java 25 |
 | Containers | [compose.yaml](compose.yaml), three Containerfiles, podman |
 | Testing | Go tests, 49 pytest tests including live TLS, an end-to-end run |
 
