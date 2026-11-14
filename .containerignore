@@ -1,9 +1,5 @@
-.git
-.github
-.superpowers
-.archify
-docs
-certs
-bin
-*.key
-**/__pycache__
+# allowlist: only the Go sources enter the build context
+*
+!go.mod
+!cmd
+!internal
