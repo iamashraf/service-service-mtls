@@ -65,7 +65,7 @@ On `/orders` the checks run in this order. The first failure ends the request. O
 7. Thumbprint matches (`thumbprint_mismatch`, 401)
 8. Scope allows the call (`insufficient_scope`, 403)
 
-The checks run before the body is parsed. A `POST /orders` with a bad body and no valid token gets 401, not 422. A bad body with a valid token gets 422 `invalid_body`. Unknown paths get 404 `http_404`. All of these are logged.
+The server runs the checks before it parses the body. A `POST /orders` with a bad body and no valid token gets 401, not 422. A bad body with a valid token gets 422 `invalid_body`. Unknown paths get 404 `http_404`. The server logs all of these.
 
 ## The pieces
 
@@ -106,7 +106,7 @@ Thumbprints differ on every run because the certs are fresh.
 
 ## Scenario walk-through
 
-This output comes from a real run. The `api` log lines are trimmed to their text.
+This output comes from a real run. The `api` log lines show only their text.
 
 ```text
 SCENARIO                         EXPECTED                   MATCH  ACTUAL
@@ -165,11 +165,11 @@ INFO:app:cn='java-writer' thumbprint=5EeJsK7v decision=allow reason=ok
 
 Python ASGI servers do not hand the client cert to the app. `app/tls.py` subclasses Hypercorn's `TCPServer`. After the handshake it copies the peer cert into a `ContextVar`. The handler reads it from there.
 
-A test runs concurrent connections and checks that no cert leaks between them. This relies on Hypercorn internals, so the version is pinned.
+A test runs concurrent connections and checks that no cert leaks between them. This relies on Hypercorn internals, so we pin the version.
 
 ### Hypercorn allows TLS 1.2
 
-Hypercorn sets a TLS 1.2 floor. A `Config` subclass raises `minimum_version` to TLS 1.3. A test shows a TLS 1.2 client is rejected and no request reaches the app.
+Hypercorn sets a TLS 1.2 floor. A `Config` subclass raises `minimum_version` to TLS 1.3. A test shows the server rejects a TLS 1.2 client and no request reaches the app.
 
 ### TLS 1.3 shows rejection on the first read
 
@@ -179,9 +179,9 @@ In TLS 1.3 the client finishes its handshake before the server checks the client
 
 A failed handshake is never a request, so the API logs nothing. Read the client output instead.
 
-### Started is not ready
+### A started container is not a ready one
 
-Compose `service_started` only means the process began. The api calls the CA at startup, so it waits for the CA healthcheck (`service_healthy`).
+Compose `service_started` only means the process began. The api calls the CA at startup, so it waits for the CA healthcheck (`service_healthy`). The client waits for an api healthcheck, a TCP connect to port 8443, in the same way.
 
 ## Demo shortcuts and what this does not cover
 

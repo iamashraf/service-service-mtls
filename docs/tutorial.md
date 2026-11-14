@@ -55,7 +55,7 @@ The app needs the client cert to bind a token to it. Python ASGI servers verify 
 
 `PeerCertTCPServer` fixes this. After the handshake it copies the peer cert into a `ContextVar`. Handlers call `peer_identity()` to read it. Handlers must be `async def`, because a threadpool worker would not see the variable.
 
-This relies on Hypercorn internals, so the version is pinned. A test runs concurrent connections and checks that no cert leaks between them.
+This relies on Hypercorn internals, so we pin the version. A test runs concurrent connections and checks that no cert leaks between them.
 
 - Code: [api/app/tls.py](../api/app/tls.py), [test_app_tls.py](../api/tests/test_app_tls.py)
 - Docs: [ASGI TLS extension](https://asgi.readthedocs.io/en/latest/extensions.html#tls-extension), [Hypercorn](https://hypercorn.readthedocs.io/)

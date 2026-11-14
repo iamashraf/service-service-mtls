@@ -59,11 +59,11 @@ The [interactive runtime architecture diagram](https://iamashraf.github.io/servi
 - **Bind the token to the cert.** The token holds the cert thumbprint, so a copy sent over another connection fails with 401.
 - **Scopes come from a server policy.** The API looks up the cert CN. Nothing in the request can raise a scope.
 - **401 and 403 mean different things.** 401 means identity or binding failed. 403 means the identity is known and the action is not allowed.
-- **TLS 1.3 only.** Hypercorn allows 1.2 by default, so a `Config` subclass raises the floor. A test shows a 1.2 client is rejected.
+- **TLS 1.3 only.** Hypercorn allows 1.2 by default, so a `Config` subclass raises the floor. A test shows the server rejects a 1.2 client.
 - **Constant-time compare.** The thumbprint check does not leak timing.
 - **A pinned adapter for the peer cert.** ASGI servers verify client certs but do not pass them to the app. A small `TCPServer` subclass does, and a test checks that concurrent connections never see each other's cert.
 
-## How it is verified
+## Tests
 
 - `go test ./...` covers the CA and cert issuing.
 - `pytest` in `api/` runs 49 tests. They include real TLS handshakes, every rejection reason, and `alg: none` and HS256 tokens.
