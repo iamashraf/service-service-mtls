@@ -63,6 +63,16 @@ The [interactive runtime architecture diagram](https://iamashraf.github.io/servi
 - **Constant-time compare.** The thumbprint check does not leak timing.
 - **A pinned adapter for the peer cert.** ASGI servers verify client certs but do not pass them to the app. A small `TCPServer` subclass does, and a test checks that concurrent connections never see each other's cert.
 
+## Container security
+
+All three services run with the same limits. The [guide](docs/guide.md#container-hardening) gives the reason for each.
+
+- They run as `nobody` (uid 65534), not root.
+- The root filesystem is read-only. Only `/tmp` is writable.
+- All Linux capabilities are dropped, and `no-new-privileges` is set.
+- `client` starts after the `api` healthcheck passes, and `api` after the `ca` healthcheck.
+- Each build context is an allowlist, so no stray file reaches an image.
+
 ## Tests
 
 - `go test ./...` covers the CA and cert issuing.

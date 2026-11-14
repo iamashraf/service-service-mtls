@@ -16,6 +16,19 @@ podman compose up --build --exit-code-from client
 podman compose down -v
 ```
 
+## Check the containers and CI
+
+```sh
+podman compose up -d ca api
+podman exec mtlsdemo-api-1 id      # expect uid=65534(nobody)
+podman compose down -v
+gh run watch                       # follow the latest CI run
+```
+
+## Publish the diagram
+
+The README links to the architecture diagram on GitHub Pages. After the repo is public, open Settings, then Pages. Set the source to branch `main` and folder `/docs`. The diagram then loads at `https://iamashraf.github.io/service-service-mtls/runtime-architecture.html`. GitHub does not serve Pages from a private repo on the free plan.
+
 ## Conventions
 
 - Add a test with any change to a check or a status code.
