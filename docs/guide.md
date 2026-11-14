@@ -60,9 +60,12 @@ On `/orders` the checks run in this order. The first failure ends the request. O
 2. Bearer token parses (`malformed`, 401)
 3. Signature and expiry (`bad_signature`, `expired`, 401)
 4. Audience (`bad_audience`, 401)
-5. `cnf` present (`no_cnf`, 401)
-6. Thumbprint matches (`thumbprint_mismatch`, 401)
-7. Scope allows the call (`insufficient_scope`, 403)
+5. Issuer (`bad_issuer`, 401)
+6. `cnf` present (`no_cnf`, 401)
+7. Thumbprint matches (`thumbprint_mismatch`, 401)
+8. Scope allows the call (`insufficient_scope`, 403)
+
+The checks run before the body is parsed. A `POST /orders` with a bad body and no valid token gets 401, not 422. A bad body with a valid token gets 422 `invalid_body`. Unknown paths get 404 `http_404`. All of these are logged.
 
 ## The pieces
 
@@ -148,7 +151,7 @@ INFO:app:cn='java-reader' thumbprint=MviyHwk5 decision=deny reason=thumbprint_mi
 
 The client enrolls `java-rogue` with `issuer: "rogue"`. The API trusts only the demo CA, so the TLS handshake fails. The API logs nothing, because no handler ran.
 
-The JDK does not even send this cert. Its issuer is not in the CA list the server offers. The client sees `Connection reset`. Some runs show `EOF reached while reading`.
+The JDK does send this cert. The server's certificate request carries no list of accepted CAs, so the client has no reason to hold it back. The server rejects the cert after the client sends it. The client sees `Connection reset`. Some runs show `EOF reached while reading`.
 
 The control call proves the API was still up. The writer calls again and gets 200:
 
