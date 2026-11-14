@@ -17,6 +17,9 @@ services:
       context: .
       dockerfile: Containerfile
     command: ["ca"]
+    # values come from .env.local (podman compose --env-file .env.local); the file is never committed or built into an image
+    environment:
+      ENROLL_SECRETS: java-writer=${ENROLL_SECRET_WRITER:?},java-reader=${ENROLL_SECRET_READER:?},java-rogue=${ENROLL_SECRET_ROGUE:?},api.demo=${ENROLL_SECRET_API:?}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 1s
@@ -28,6 +31,7 @@ services:
     build: {context: ./api, dockerfile: Containerfile}
     environment:
       CA_URL: http://ca.demo:8080
+      ENROLL_SECRET: ${ENROLL_SECRET_API:?}
     # a TCP connect proves the TLS port is open; the client cert is not needed for that
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8443), 2)"]
@@ -43,5 +47,6 @@ services:
     environment:
       CA_URL: http://ca.demo:8080
       API_URL: https://api.demo:8443
+      ENROLL_SECRETS: java-writer=${ENROLL_SECRET_WRITER:?},java-reader=${ENROLL_SECRET_READER:?},java-rogue=${ENROLL_SECRET_ROGUE:?}
     depends_on:
       api: {condition: service_healthy}

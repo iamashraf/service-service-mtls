@@ -17,7 +17,7 @@ AuthN (authentication) is who you are. Here the client cert answers it. AuthZ (a
 
 ## Where the certs come from
 
-The mock CA is a Go service. A service calls `POST /enroll` with a name and a kind (`server` or `client`). The CA replies with a cert, a private key and the CA cert.
+The mock CA is a Go service. A service calls `POST /enroll` with a name and a kind (`server` or `client`). The request carries a CSR and an enrollment secret. The CA replies with a cert and the CA cert, never a private key.
 
 ```json
 {"name": "java-writer", "kind": "client", "dns": [], "issuer": "demo"}
@@ -93,13 +93,13 @@ The api also enrolls at startup to get its own server cert.
 ## Run it
 
 ```sh
-podman compose up --build --exit-code-from client
+podman compose --env-file .env.local up --build --exit-code-from client
 ```
 
 Success: every row of the client table says `yes` in the MATCH column and the exit code is 0.
 
 ```sh
-podman compose down -v
+podman compose --env-file .env.local down -v
 ```
 
 Thumbprints differ on every run because the certs are fresh.
@@ -120,9 +120,9 @@ All three services share the limits in `compose.yaml`.
 To check that a service is not root:
 
 ```sh
-podman compose up -d ca api
+podman compose --env-file .env.local up -d ca api
 podman exec mtlsdemo-api-1 id
-podman compose down -v
+podman compose --env-file .env.local down -v
 ```
 
 Expect `uid=65534(nobody)`. The client container exits after its run. Check its image with `podman image inspect mtlsdemo-client --format '{{.Config.User}}'`.
@@ -148,6 +148,8 @@ SCENARIO                         EXPECTED                   MATCH  ACTUAL
 3 reader replays writer token    401 thumbprint_mismatch    yes    401 thumbprint_mismatch
 4 rogue cert                     TLS handshake rejected     yes    java.io.IOException: Connection reset
 4 control: writer still served   200                        yes    200
+5 attacker enrolls, no secret    403 enroll refused         yes    403
+5 attacker enrolls, wrong secret 403 enroll refused         yes    403
 ```
 
 ### 1. Writer reads and writes
@@ -190,6 +192,12 @@ The control call proves the API was still up. The writer calls again and gets 20
 INFO:app:cn='java-writer' thumbprint=5EeJsK7v decision=allow reason=ok
 ```
 
+### 5. Attacker enrolls as the writer
+
+Scopes follow the cert CN, so the CA must check who asks for `java-writer`. Without the `X-Enroll-Secret` header, or with a wrong one, the CA answers 403 and issues nothing. The legitimate writer enrolled with its secret, so scenarios 1 to 3 are the control.
+
+A CSR and a secret fix different things. The CSR keeps the private key off the network and proves the requester holds it. The secret decides who may have the name.
+
 ## Gotchas we hit
 
 ### The client cert is not in the ASGI scope
@@ -216,7 +224,7 @@ Compose `service_started` only means the process began. The api calls the CA at 
 
 ## Demo shortcuts and what this does not cover
 
-- `/enroll` is unauthenticated, uses plain HTTP and returns the private key.
+- `/enroll` uses plain HTTP, and the enrollment secrets are random per machine in `.env.local`, not a real secret store. A compromised client that holds the `java-writer` secret can still enroll as the writer.
 - Apps trust the CA cert from that same call (trust on first use).
 - There is no rotation or revocation. Certs last 24 hours and tokens 300 seconds.
 - A TLS-terminating proxy in front of the API would hide the client cert. The binding would then break.

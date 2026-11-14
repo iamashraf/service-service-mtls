@@ -13,14 +13,32 @@ One command starts a Go certificate authority, a FastAPI server and a Java 25 cl
 | Authorization design | [policy table](api/app/policy.py), [ordered checks](api/app/guard.py) |
 | Three languages in one system | Go, Python 3.14, Java 25 |
 | Containers | [compose.yaml](compose.yaml), three Containerfiles, podman |
-| Testing | Go tests, 49 pytest tests including live TLS, an end-to-end run |
+| Testing | Go tests, 53 pytest tests including live TLS, an end-to-end run |
 
 ## See it in 2 minutes
 
 You need `podman` with `podman compose`.
 
+Put the enrollment secrets in `.env.local` in the repo root. Git ignores it and no image build includes it. These values are samples. Use your own, for example from `openssl rand -hex 16`.
+
 ```sh
-podman compose up --build --exit-code-from client
+ENROLL_SECRET_WRITER=sample-writer-secret
+ENROLL_SECRET_READER=sample-reader-secret
+ENROLL_SECRET_ROGUE=sample-rogue-secret
+ENROLL_SECRET_API=sample-api-secret
+```
+
+| Variable | Used by | Enrolls as |
+|---|---|---|
+| `ENROLL_SECRET_WRITER` | ca, client | `java-writer` |
+| `ENROLL_SECRET_READER` | ca, client | `java-reader` |
+| `ENROLL_SECRET_ROGUE` | ca, client | `java-rogue` |
+| `ENROLL_SECRET_API` | ca, api | `api.demo` |
+
+Compose stops with an error if one is missing.
+
+```sh
+podman compose --env-file .env.local up --build --exit-code-from client
 ```
 
 Real output from a run:
@@ -36,7 +54,7 @@ SCENARIO                         EXPECTED                   MATCH  ACTUAL
 4 control: writer still served   200                        yes    200
 ```
 
-Clean up with `podman compose down -v`.
+Clean up with `podman compose --env-file .env.local down -v`.
 
 ## Architecture
 
@@ -57,10 +75,11 @@ The [interactive runtime architecture diagram](https://iamashraf.github.io/servi
 ## Design decisions
 
 - **Bind the token to the cert.** The token holds the cert thumbprint, so a copy sent over another connection fails with 401.
-- **Scopes come from a server policy.** The API looks up the cert CN. Nothing in the request can raise a scope.
+- **Scopes come from a server policy.** The API looks up the cert CN. Nothing in the `/token` request can raise a scope. Scopes follow the cert CN, so whoever controls enrollment controls scopes. The CA therefore checks an enrollment secret per name.
+- **Enroll with a CSR.** Each service makes its own key and sends only a certificate signing request. The private key never crosses the network, and the CA ignores the name inside the CSR.
 - **401 and 403 mean different things.** 401 means identity or binding failed. 403 means the identity is known and the action is not allowed.
 - **TLS 1.3 only.** Hypercorn allows 1.2 by default, so a `Config` subclass raises the floor. A test shows the server rejects a 1.2 client.
-- **Constant-time compare.** The thumbprint check does not leak timing.
+- **Constant-time compare.** Good hygiene only. The thumbprint is not secret: it is inside the token, and anyone with the public cert can compute it.
 - **A pinned adapter for the peer cert.** ASGI servers verify client certs but do not pass them to the app. A small `TCPServer` subclass does, and a test checks that concurrent connections never see each other's cert.
 
 ## Container security
@@ -76,13 +95,17 @@ All three services run with the same limits. The [guide](docs/guide.md#container
 ## Tests
 
 - `go test ./...` covers the CA and cert issuing.
-- `pytest` in `api/` runs 49 tests. They include real TLS handshakes, every rejection reason, and `alg: none` and HS256 tokens.
+- `pytest` in `api/` runs 53 tests. They include real TLS handshakes, every rejection reason, and `alg: none` and HS256 tokens.
 - The client run is the end-to-end test. Breaking the thumbprint check makes it exit 1.
 - [CI](.github/workflows/ci.yml) runs the Go and Python tests on every push.
 
 ## Known limits
 
-- `/enroll` is unauthenticated plain HTTP and returns the private key. A real CA takes a CSR and checks who asks.
+- `/enroll` uses plain HTTP, and the enrollment secrets are random per machine in `.env.local`, not a real secret store. A real CA checks the platform identity of the caller, for example a Kubernetes service account token or SPIFFE attestation.
+- The client container holds the `java-writer` secret, so a compromised client can still enroll as the writer. The secret only keeps out callers who merely reach the CA. Scenario 5 shows that case.
+- Identity is the cert CN. Modern practice uses a SAN, for example a SPIFFE URI SAN.
+- The leaf and the CA are both valid for 24 hours, so a cert issued later expires after the CA does. A stack left up for over 24 hours breaks.
+- [RFC 8705](https://www.rfc-editor.org/rfc/rfc8705) usually splits the authorization server and the resource server. Here the API is both.
 - The apps trust the CA cert from that same call.
 - There is no rotation, revocation or key publishing (JWKS).
 - A TLS-terminating proxy in front of the API would hide the client cert and break the binding.

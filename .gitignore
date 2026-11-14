@@ -1,4 +1,5 @@
 certs/
+.env*
 *.key
 bin/
 .superpowers/

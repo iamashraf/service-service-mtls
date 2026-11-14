@@ -11,16 +11,16 @@ You will run the demo, then read each piece in the order a request meets it. Eac
 
 ## Before you start
 
-You need `podman` with `podman compose`. Nothing else.
+You need `podman` with `podman compose`, and a `.env.local` with the enrollment secrets. The [README](../README.md#see-it-in-2-minutes) shows sample values.
 
 ```sh
-podman compose up --build --exit-code-from client
+podman compose --env-file .env.local up --build --exit-code-from client
 ```
 
 Read the table the client prints. Every row must say `yes` in the MATCH column. Then clean up:
 
 ```sh
-podman compose down -v
+podman compose --env-file .env.local down -v
 ```
 
 Each section below explains one row of that table.
@@ -36,11 +36,13 @@ The API sets `CERT_REQUIRED` and a TLS 1.3 minimum. A client with no cert, or a 
 
 ## Step 2: Get certs from the mock CA
 
-The Go CA is a small HTTP service. A service calls `POST /enroll` with a name and a kind (`server` or `client`). The reply holds a cert, a private key and the CA cert.
+The Go CA is a small HTTP service. A service calls `POST /enroll` with a name and a kind (`server` or `client`). The service makes its own key and sends a CSR (certificate signing request) with an enrollment secret. The reply holds a cert and the CA cert. The private key never leaves the service.
 
 ```json
-{"name": "java-writer", "kind": "client", "dns": [], "issuer": "demo"}
+{"name": "java-writer", "kind": "client", "dns": [], "issuer": "demo", "csr_pem": "-----BEGIN CERTIFICATE REQUEST-----..."}
 ```
+
+The secret goes in the `X-Enroll-Secret` header. The CA refuses with 403 when it is missing, wrong or not set for that name. It takes the name from the JSON, not from the CSR.
 
 The cert's key usage matches the kind, so a client cert cannot act as a server. The `issuer: "rogue"` option signs with a second CA. Scenario 4 uses it.
 
@@ -69,7 +71,7 @@ The API signs an ES256 JWT (a signed token). It carries a `cnf` claim with the S
  "cnf": {"x5t#S256": "<base64url SHA-256 of the cert DER>"}}
 ```
 
-On every call the server hashes the cert from the connection and compares it with `cnf`. The compare is constant-time. A stolen token fails on any other cert.
+On every call the server hashes the cert from the connection and compares it with `cnf`. The compare is constant-time, which is hygiene only since the thumbprint is not secret. A stolen token fails on any other cert.
 
 - Code: [api/app/binding.py](../api/app/binding.py), [api/app/tokens.py](../api/app/tokens.py)
 - Standards: [RFC 8705, certificate-bound tokens](https://www.rfc-editor.org/rfc/rfc8705), [RFC 7519, JWT](https://www.rfc-editor.org/rfc/rfc7519)
@@ -113,7 +115,7 @@ ctx.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
 The client keeps one context per identity, so the writer and the reader each present their own cert.
 
 - Code: [Tls.java](../client/src/main/java/demo/Tls.java), [Enroller.java](../client/src/main/java/demo/Enroller.java), [Api.java](../client/src/main/java/demo/Api.java)
-- Docs: [JSSE reference guide](https://docs.oracle.com/en/java/javase/21/security/java-secure-socket-extension-jsse-reference-guide.html)
+- Docs: [JSSE reference guide](https://docs.oracle.com/en/java/javase/25/security/java-secure-socket-extension-jsse-reference-guide.html)
 
 ## Step 7: Walk the scenarios
 
@@ -127,6 +129,7 @@ The client runs these in [Main.java](../client/src/main/java/demo/Main.java).
 | 3 reader replays writer token | 401 `thumbprint_mismatch` | Binding blocks token theft |
 | 4 rogue-CA cert | TLS handshake rejected | Unknown CA never reaches the app |
 | 4 control: writer `GET` | 200 | The API was still up |
+| 5 attacker enrolls as `java-writer`, no or wrong secret | 403 | CN means scopes, so the CA checks who asks |
 
 In scenario 4 the JDK does send the rogue cert. The server rejects it after the handshake. With TLS 1.3 the client sees this on its first read, as `Connection reset` or `EOF reached while reading`.
 
@@ -138,7 +141,7 @@ Changes 1 and 2 make the client exit 1. Undo each with `git checkout -- <file>` 
 
 1. **Remove a scope.** In [policy.py](../api/app/policy.py) delete `orders:write` from `java-writer`. Scenario 1 `POST` returns 403.
 2. **Break the binding.** In [binding.py](../api/app/binding.py) make `matches` return `True`. Scenario 3 returns 200 instead of 401. This proves the check is what stops the replay.
-3. **Watch the handshake.** Save this as `debug.yaml`, then run `podman compose -f compose.yaml -f debug.yaml up --build --exit-code-from client`. Search the output for `Produced client Certificate` to see each cert the client sends.
+3. **Watch the handshake.** Save this as `debug.yaml`, then run `podman compose --env-file .env.local -f compose.yaml -f debug.yaml up --build --exit-code-from client`. Search the output for `Produced client Certificate` to see each cert the client sends.
 
 ```yaml
 services:
@@ -151,6 +154,7 @@ services:
 
 This demo leaves out what a real system needs.
 
+- **Identity in a SAN.** The API reads the CN. Modern practice puts identity in a SAN, for example a SPIFFE URI SAN.
 - **Rotation and revocation.** Certs last 24 hours and tokens 300 seconds. Nothing renews or revokes them.
 - **Automated cert issuance.** See [ACME, RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) and [SPIFFE](https://spiffe.io/).
 - **Key distribution.** The signing key lives in API memory. A real server publishes its public key, for example through JWKS ([RFC 7517](https://www.rfc-editor.org/rfc/rfc7517)).
@@ -165,4 +169,4 @@ This demo leaves out what a real system needs.
 | Cert binding | [binding.py](../api/app/binding.py) | [RFC 8705](https://www.rfc-editor.org/rfc/rfc8705) |
 | Tokens | [tokens.py](../api/app/tokens.py) | [RFC 7519](https://www.rfc-editor.org/rfc/rfc7519) |
 | Scopes | [guard.py](../api/app/guard.py) | [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) |
-| Java client | [Tls.java](../client/src/main/java/demo/Tls.java) | [JSSE](https://docs.oracle.com/en/java/javase/21/security/java-secure-socket-extension-jsse-reference-guide.html) |
+| Java client | [Tls.java](../client/src/main/java/demo/Tls.java) | [JSSE](https://docs.oracle.com/en/java/javase/25/security/java-secure-socket-extension-jsse-reference-guide.html) |

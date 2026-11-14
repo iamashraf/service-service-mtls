@@ -1,6 +1,9 @@
 package pki
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"testing"
@@ -19,7 +22,11 @@ func parse(t *testing.T, certPEM []byte) *x509.Certificate {
 
 func issue(t *testing.T, ca *CA, dns []string, eku x509.ExtKeyUsage, nb, na time.Time) *x509.Certificate {
 	t.Helper()
-	c, _, err := ca.Issue("x", dns, eku, nb, na)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ca.Issue("x", dns, eku, nb, na, &key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

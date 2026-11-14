@@ -5255,11 +5255,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <!-- Connection paths (before components for correct z-order) -->
         <g data-graph-role="automatic-crossover" style="--step:0">
           <path data-graph-role="automatic-crossover-underlay" d="M 174 300 L 174 126 Q 174 118 182 118 L 430 118" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="client" data-edge-to="ca" data-edge-label="enroll: POST /enroll" data-edge-key="0" data-edge-id="client-enrolls" data-composition-points="174,300;174,118;430,118" data-composition-crossover="halo" data-composition-independent="true" d="M 174 300 L 174 126 Q 174 118 182 118 L 430 118" class="a-dashed" data-animate="edge" style="--step:0" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-edge-from="client" data-edge-to="ca" data-edge-label="enroll: CSR + secret" data-edge-key="0" data-edge-id="client-enrolls" data-composition-points="174,300;174,118;430,118" data-composition-crossover="halo" data-composition-independent="true" d="M 174 300 L 174 126 Q 174 118 182 118 L 430 118" class="a-dashed" data-animate="edge" style="--step:0" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:1">
           <path data-graph-role="automatic-crossover-underlay" d="M 505 300 L 505 134" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="api" data-edge-to="ca" data-edge-label="enroll at startup" data-edge-key="1" data-edge-id="api-enrolls" data-composition-points="505,300;505,134" data-composition-crossover="halo" data-composition-independent="true" d="M 505 300 L 505 134" class="a-dashed" data-animate="edge" style="--step:1" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-edge-from="api" data-edge-to="ca" data-edge-label="enroll: CSR + secret" data-edge-key="1" data-edge-id="api-enrolls" data-composition-points="505,300;505,134" data-composition-crossover="halo" data-composition-independent="true" d="M 505 300 L 505 134" class="a-dashed" data-animate="edge" style="--step:1" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:2">
           <path data-graph-role="automatic-crossover-underlay" d="M 190 340.05 L 430 340.05" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
@@ -5305,13 +5305,13 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="client" data-edge-to="ca" data-edge-label="enroll: POST /enroll" data-edge-key="0" data-edge-id="client-enrolls">
+        <g data-detail="context" data-edge-from="client" data-edge-to="ca" data-edge-label="enroll: CSR + secret" data-edge-key="0" data-edge-id="client-enrolls">
           <rect x="249" y="98" width="106" height="14" rx="3" class="c-mask"/>
-          <text x="302" y="108" class="t-edge-dashed" font-size="8" text-anchor="middle">enroll: POST /enroll</text>
+          <text x="302" y="108" class="t-edge-dashed" font-size="8" text-anchor="middle">enroll: CSR + secret</text>
         </g>
-        <g data-detail="context" data-edge-from="api" data-edge-to="ca" data-edge-label="enroll at startup" data-edge-key="1" data-edge-id="api-enrolls">
-          <rect x="459.2" y="280" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="505" y="290" class="t-edge-dashed" font-size="8" text-anchor="middle">enroll at startup</text>
+        <g data-detail="context" data-edge-from="api" data-edge-to="ca" data-edge-label="enroll: CSR + secret" data-edge-key="1" data-edge-id="api-enrolls">
+          <rect x="452" y="280" width="106" height="14" rx="3" class="c-mask"/>
+          <text x="505" y="290" class="t-edge-dashed" font-size="8" text-anchor="middle">enroll: CSR + secret</text>
         </g>
         <g data-detail="context" data-edge-from="client" data-edge-to="api" data-edge-label="mTLS: token + orders calls" data-edge-key="2" data-edge-id="mtls-calls">
           <rect x="242.6" y="320.05" width="134.8" height="14" rx="3" class="c-mask"/>
@@ -5548,6 +5548,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
         <ul>
           <li>The API enrolls its server cert once the CA healthcheck passes</li>
+          <li>Each service makes its own key and sends a CSR with a per-name secret. The CA never sees a private key and answers 403 without the secret</li>
           <li>The client enrolls java-writer, java-reader and a rogue-issued identity</li>
           <li>The client exit code is the test result</li>
         </ul>

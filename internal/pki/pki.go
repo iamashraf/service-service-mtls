@@ -59,15 +59,12 @@ func (c *CA) PEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Cert.Raw})
 }
 
-// Issue signs a leaf cert. eku limits what the cert may be used for.
-func (c *CA) Issue(cn string, dns []string, eku x509.ExtKeyUsage, notBefore, notAfter time.Time) (certPEM, keyPEM []byte, err error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
+// Issue signs a leaf cert for the requester's public key; the CA never sees the private key.
+// eku limits what the cert may be used for.
+func (c *CA) Issue(cn string, dns []string, eku x509.ExtKeyUsage, notBefore, notAfter time.Time, pub *ecdsa.PublicKey) (certPEM []byte, err error) {
 	sn, err := serial()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	tpl := &x509.Certificate{
 		SerialNumber: sn,
@@ -78,14 +75,9 @@ func (c *CA) Issue(cn string, dns []string, eku x509.ExtKeyUsage, notBefore, not
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{eku}, // client vs server role is enforced by this
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, c.Cert, &key.PublicKey, c.Key)
+	der, err := x509.CreateCertificate(rand.Reader, tpl, c.Cert, pub, c.Key)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
 }

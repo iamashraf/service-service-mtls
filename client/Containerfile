@@ -4,7 +4,7 @@ COPY pom.xml .
 # resolve dependencies in their own layer so source edits do not re-download them
 RUN mvn -q -B dependency:go-offline
 COPY src src
-RUN mvn -q -B package -DskipTests
+RUN mvn -q -B package
 
 FROM docker.io/library/eclipse-temurin:25-jre
 WORKDIR /app

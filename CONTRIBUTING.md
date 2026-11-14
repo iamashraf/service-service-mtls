@@ -9,19 +9,19 @@ go vet ./... && go test ./...
 cd api && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest -q
 ```
 
-Run the full demo before you open a pull request. It must exit 0.
+Run the full demo before you open a pull request. It must exit 0. It needs `.env.local`; see the [README](README.md#see-it-in-2-minutes).
 
 ```sh
-podman compose up --build --exit-code-from client
-podman compose down -v
+podman compose --env-file .env.local up --build --exit-code-from client
+podman compose --env-file .env.local down -v
 ```
 
 ## Check the containers and CI
 
 ```sh
-podman compose up -d ca api
+podman compose --env-file .env.local up -d ca api
 podman exec mtlsdemo-api-1 id      # expect uid=65534(nobody)
-podman compose down -v
+podman compose --env-file .env.local down -v
 gh run watch                       # follow the latest CI run
 ```
 
