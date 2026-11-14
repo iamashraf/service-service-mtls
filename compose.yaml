@@ -2,7 +2,8 @@ name: mtlsdemo
 
 # --exit-code-from aborts the stack when any container exits, so ca and api stay running.
 # Every service drops all capabilities, cannot gain privileges and has a read-only root
-# filesystem. /tmp is the only writable path (the api writes its cert files there).
+# filesystem. Only tmpfs mounts are writable: /tmp (the api writes its cert files there),
+# plus /var/tmp and /dev/shm, which podman adds.
 x-hardening: &hardening
   read_only: true
   tmpfs: [/tmp]

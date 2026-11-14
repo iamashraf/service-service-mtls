@@ -112,7 +112,7 @@ All three services share the limits in `compose.yaml`.
 |---|---|---|
 | Non-root user `65534:65534` | `USER` in each Containerfile | A bug in a service does not give root in the container. All ports are above 1024, so no privilege is needed. |
 | Read-only root filesystem | `read_only: true` | A compromised process cannot change the image. |
-| `/tmp` as tmpfs | `tmpfs: [/tmp]` | The api writes its cert files there and the JVM uses it. The files vanish when the container stops. |
+| tmpfs mounts | `tmpfs: [/tmp]` | The api writes its cert files to `/tmp` and the JVM uses it. Podman also mounts writable tmpfs on `/var/tmp` and `/dev/shm`, so those paths are writable too. The files vanish when the container stops. |
 | No capabilities | `cap_drop: [ALL]` | No service needs one. |
 | No privilege gain | `no-new-privileges:true` | A setuid binary cannot raise privileges. |
 | Healthchecks | `ca`: `wget` on `/healthz`. `api`: a TCP connect to port 8443. | `depends_on` waits for `service_healthy`, so each service starts after the one it calls. A TCP connect needs no client cert. |
@@ -130,7 +130,7 @@ Expect `uid=65534(nobody)`. The client container exits after its run. Check its 
 ### Build context
 
 - The root `.containerignore` is an allowlist: it keeps `go.mod`, `cmd` and `internal` and drops the rest. That is why the CA Containerfile can use one `COPY . .`. If you add Go dependencies, copy `go.mod` and `go.sum` first and run `go mod download` before `COPY . .`.
-- `api/.containerignore` and `client/.containerignore` keep `.venv`, tests and `target/` out of the context. The `.venv` alone was 60 MB.
+- `api/.containerignore` and `client/.containerignore` are allowlists too. The api context keeps `requirements.txt` and `app/`. The client context keeps `pom.xml` and `src/`. The `.venv` alone was 60 MB. All three `.containerignore` files also exclude `.env*` files, including inside the allowed directories.
 - Base images use full `docker.io/library/` names with version tags. They are not pinned by digest, so a tag can change under you.
 - Maven resolves dependencies in its own layer, so a source edit does not download them again.
 - The Go binary builds with `CGO_ENABLED=0`, `-trimpath` and stripped symbols, so it runs on plain Alpine.

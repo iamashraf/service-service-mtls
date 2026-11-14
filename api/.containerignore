@@ -1,5 +1,7 @@
-.venv
-.pytest_cache
-tests
+# allowlist: only what the image needs
+*
+!requirements.txt
+!app
 **/__pycache__
-requirements-dev.txt
+# env files never enter a context, even inside an allowed directory
+**/.env*

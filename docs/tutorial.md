@@ -53,7 +53,7 @@ This is a shortcut. A real CA takes a certificate signing request (CSR), so the 
 
 The app needs the client cert to bind a token to it. Python ASGI servers verify the cert but do not hand it to the app.
 
-`PeerCertTCPServer` fixes this. After the handshake it copies the peer cert into a `ContextVar`. Handlers call `peer_identity()` to read it. Handlers must be `async def`, because a threadpool worker would not see the variable.
+`PeerCertTCPServer` fixes this. After the handshake it copies the peer cert into a `ContextVar`. Handlers call `peer_identity()` to read it.
 
 This relies on Hypercorn internals, so we pin the version. A test runs concurrent connections and checks that no cert leaks between them.
 

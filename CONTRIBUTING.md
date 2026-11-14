@@ -6,7 +6,7 @@ Issues and pull requests are welcome. Keep changes small and tied to one purpose
 
 ```sh
 go vet ./... && go test ./...
-cd api && python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest -q
+cd api && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest -q
 ```
 
 Run the full demo before you open a pull request. It must exit 0.

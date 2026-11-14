@@ -3,3 +3,5 @@
 !go.mod
 !cmd
 !internal
+# env files never enter a context, even inside an allowed directory
+**/.env*

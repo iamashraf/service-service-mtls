@@ -1,1 +1,6 @@
-target
+# allowlist: only what the build needs
+*
+!pom.xml
+!src
+# env files never enter a context, even inside an allowed directory
+**/.env*

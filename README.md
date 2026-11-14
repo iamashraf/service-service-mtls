@@ -68,10 +68,10 @@ The [interactive runtime architecture diagram](https://iamashraf.github.io/servi
 All three services run with the same limits. The [guide](docs/guide.md#container-hardening) gives the reason for each.
 
 - They run as `nobody` (uid 65534), not root.
-- The root filesystem is read-only. Only `/tmp` is writable.
+- The root filesystem is read-only. Only tmpfs mounts are writable: `/tmp`, `/var/tmp` and `/dev/shm`.
 - All Linux capabilities are dropped, and `no-new-privileges` is set.
 - `client` starts after the `api` healthcheck passes, and `api` after the `ca` healthcheck.
-- Each build context is an allowlist, so no stray file reaches an image.
+- Each build context is an allowlist, and `.env` files are excluded everywhere, so a stray secret file does not reach an image.
 
 ## Tests
 
