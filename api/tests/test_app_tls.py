@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import json
+import logging
 import socket
 import ssl
 import threading
@@ -293,3 +294,21 @@ def test_unknown_path_is_404_json(srv, pki):
     with client(pki, "java-writer") as c:
         r = c.get(url(srv, "/nope"))
     assert r.status_code == 404 and r.json() == {"error": "http_404"}
+
+
+@pytest.mark.parametrize("body", [b"{bad", b"\xff\xfe\xfd"])
+def test_malformed_body_without_auth_is_401(srv, pki, body):
+    with client(pki, "java-writer") as c:
+        r = c.post(url(srv, "/orders"), content=body, headers={"content-type": "application/json"})
+    assert r.status_code == 401 and r.json() == {"error": "malformed"}
+
+
+def test_one_log_line_per_request(srv, pki, caplog):
+    h = bearer(srv, pki, "java-writer")
+    caplog.set_level(logging.INFO, logger="app")
+    caplog.clear()
+    with client(pki, "java-writer") as c:
+        c.post(url(srv, "/orders"), json={"nope": 1}, headers=h)
+        c.post(url(srv, "/orders"), json={"item": "ok"}, headers=h)
+    lines = [r.getMessage() for r in caplog.records if r.name == "app"]
+    assert [l.split("decision=")[1] for l in lines] == ["deny reason=invalid_body", "allow reason=ok"]

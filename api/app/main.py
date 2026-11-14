@@ -3,9 +3,8 @@ import logging
 import time
 
 from fastapi import Depends, FastAPI, Header, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import binding, guard, policy, tls, tokens
@@ -45,21 +44,15 @@ def create_app(signing_key, now=time.time) -> FastAPI:
         return JSONResponse({"error": f"http_{exc.status_code}"}, status_code=exc.status_code,
                             headers=exc.headers)
 
-    @app.exception_handler(RequestValidationError)
-    async def invalid_body(request: Request, exc: RequestValidationError):
-        """Log and return a bad body as 422 {"error": "invalid_body"}."""
-        _log(tls.peer_identity(), "deny", "invalid_body")
-        return JSONResponse({"error": "invalid_body"}, status_code=422)
-
     def require(scope: str):
-        """Dependency that runs the guard. FastAPI resolves it before the body is parsed,
-        so an unauthenticated caller gets 401, not a 422 about the body."""
+        """Dependency that runs the guard. Handlers read the body themselves, after this
+        passes, so an unauthenticated caller gets 401 for any body, never 422 or 400.
+        The handler logs the allow, so a request that then fails validation logs once."""
         async def check(authorization: str | None = Header(None)) -> None:
-            """Run the guard for the current connection's cert and log the allow."""
+            """Run the guard for the current connection's cert. Raises AuthError on failure."""
             ident = tls.peer_identity()
             guard.authorize(ident[0] if ident else None, authorization, scope,
                             signing_key.public_key(), int(now()))
-            _log(ident, "allow", "ok")
         return Depends(check)
 
     @app.post("/token")
@@ -80,12 +73,19 @@ def create_app(signing_key, now=time.time) -> FastAPI:
     @app.get("/orders", dependencies=[require("orders:read")])
     async def list_orders():
         """List orders. Needs orders:read."""
+        _log(tls.peer_identity(), "allow", "ok")
         return {"orders": orders}
 
     @app.post("/orders", status_code=201, dependencies=[require("orders:write")])
-    async def add_order(order: OrderIn):
-        """Add an order. Needs orders:write."""
+    async def add_order(request: Request):
+        """Add an order. Needs orders:write. The body is parsed only after auth passes."""
+        try:
+            order = OrderIn.model_validate_json(await request.body())
+        except ValidationError:
+            _log(tls.peer_identity(), "deny", "invalid_body")
+            return JSONResponse({"error": "invalid_body"}, status_code=422)
         orders.append(order.item)
+        _log(tls.peer_identity(), "allow", "ok")
         return {"orders": orders}
 
     return app

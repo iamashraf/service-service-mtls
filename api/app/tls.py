@@ -23,9 +23,8 @@ class PeerCertTCPServer(TCPServer):
 
         asyncio only calls the connection callback after the TLS handshake (and, under
         CERT_REQUIRED, client cert verification) has finished. The ASGI tasks are created
-        inside this same task, so they inherit the ContextVar. Handlers must be `async def`: a threadpool
-        worker would not see it. Depends on Hypercorn
-        internals, so the version is pinned.
+        inside this same task, so they inherit the ContextVar. Depends on Hypercorn internals,
+        so the version is pinned.
         """
         ssl_object = self.writer.get_extra_info("ssl_object")
         _peer_der.set(ssl_object.getpeercert(binary_form=True) if ssl_object else None)
