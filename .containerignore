@@ -1,0 +1,9 @@
+.git
+.github
+.superpowers
+.archify
+docs
+certs
+bin
+*.key
+**/__pycache__

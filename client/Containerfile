@@ -1,6 +1,8 @@
 FROM docker.io/library/maven:3-eclipse-temurin-25 AS build
 WORKDIR /w
 COPY pom.xml .
+# resolve dependencies in their own layer so source edits do not re-download them
+RUN mvn -q -B dependency:go-offline
 COPY src src
 RUN mvn -q -B package -DskipTests
 
@@ -9,4 +11,5 @@ WORKDIR /app
 COPY --from=build /w/target/client.jar /app/client.jar
 ENV CA_URL=http://ca.demo:8080 \
     API_URL=https://api.demo:8443
+USER 65534:65534
 CMD ["java","-jar","/app/client.jar"]

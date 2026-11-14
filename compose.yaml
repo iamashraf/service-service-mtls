@@ -1,8 +1,17 @@
 name: mtlsdemo
 
 # --exit-code-from aborts the stack when any container exits, so ca and api stay running.
+# Every service drops all capabilities, cannot gain privileges and has a read-only root
+# filesystem. /tmp is the only writable path (the api writes its cert files there).
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
 services:
   ca:
+    <<: *hardening
     build:
       context: .
       dockerfile: Containerfile
@@ -14,17 +23,24 @@ services:
     networks:
       default: {aliases: [ca.demo]}
   api:
+    <<: *hardening
     build: {context: ./api, dockerfile: Containerfile}
     environment:
       CA_URL: http://ca.demo:8080
+    # a TCP connect proves the TLS port is open; the client cert is not needed for that
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8443), 2)"]
+      interval: 1s
+      retries: 30
     depends_on:
       ca: {condition: service_healthy}
     networks:
       default: {aliases: [api.demo]}
   client:
+    <<: *hardening
     build: {context: ./client, dockerfile: Containerfile}
     environment:
       CA_URL: http://ca.demo:8080
       API_URL: https://api.demo:8443
     depends_on:
-      api: {condition: service_started}
+      api: {condition: service_healthy}
