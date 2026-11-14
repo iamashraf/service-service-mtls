@@ -2,9 +2,11 @@
 import logging
 import time
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import binding, guard, policy, tls, tokens
 from .guard import AuthError
@@ -36,12 +38,29 @@ def create_app(signing_key, now=time.time) -> FastAPI:
         _log(tls.peer_identity(), "deny", exc.reason)
         return JSONResponse({"error": exc.reason}, status_code=exc.status)
 
-    def check(required: str, authorization: str | None) -> None:
-        """Run the guard for the current connection's cert and log the allow."""
-        ident = tls.peer_identity()
-        guard.authorize(ident[0] if ident else None, authorization, required,
-                        signing_key.public_key(), int(now()))
-        _log(ident, "allow", "ok")
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException):
+        """Log and return routing errors (404, 405) as JSON {"error": "http_<status>"}."""
+        _log(tls.peer_identity(), "deny", f"http_{exc.status_code}")
+        return JSONResponse({"error": f"http_{exc.status_code}"}, status_code=exc.status_code,
+                            headers=exc.headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_body(request: Request, exc: RequestValidationError):
+        """Log and return a bad body as 422 {"error": "invalid_body"}."""
+        _log(tls.peer_identity(), "deny", "invalid_body")
+        return JSONResponse({"error": "invalid_body"}, status_code=422)
+
+    def require(scope: str):
+        """Dependency that runs the guard. FastAPI resolves it before the body is parsed,
+        so an unauthenticated caller gets 401, not a 422 about the body."""
+        async def check(authorization: str | None = Header(None)) -> None:
+            """Run the guard for the current connection's cert and log the allow."""
+            ident = tls.peer_identity()
+            guard.authorize(ident[0] if ident else None, authorization, scope,
+                            signing_key.public_key(), int(now()))
+            _log(ident, "allow", "ok")
+        return Depends(check)
 
     @app.post("/token")
     async def token():
@@ -58,16 +77,14 @@ def create_app(signing_key, now=time.time) -> FastAPI:
         _log(ident, "allow", "ok")
         return {"access_token": tok, "token_type": "Bearer", "expires_in": tokens.TTL}
 
-    @app.get("/orders")
-    async def list_orders(authorization: str | None = Header(None)):
+    @app.get("/orders", dependencies=[require("orders:read")])
+    async def list_orders():
         """List orders. Needs orders:read."""
-        check("orders:read", authorization)
         return {"orders": orders}
 
-    @app.post("/orders", status_code=201)
-    async def add_order(order: OrderIn, authorization: str | None = Header(None)):
+    @app.post("/orders", status_code=201, dependencies=[require("orders:write")])
+    async def add_order(order: OrderIn):
         """Add an order. Needs orders:write."""
-        check("orders:write", authorization)
         orders.append(order.item)
         return {"orders": orders}
 

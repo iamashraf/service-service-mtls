@@ -21,8 +21,8 @@ public final class Tls {
 
     /**
      * Returns a TLS 1.3 context that presents the identity's cert and trusts only its CA.
-     * Note: the JDK key manager sends a cert only if its issuer is in the server's CA list,
-     * so a rogue-issued cert is not sent at all.
+     * Note: the server sends no CA list, so the JDK presents even a rogue-issued cert
+     * and the server rejects it after the handshake message arrives.
      */
     public static SSLContext contextFor(Identity id) throws Exception {
         CertificateFactory cf = CertificateFactory.getInstance("X.509");

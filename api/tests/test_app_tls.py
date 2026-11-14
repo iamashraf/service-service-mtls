@@ -274,3 +274,22 @@ def test_tls12_client_is_rejected(srv, pki):
         httpx.Client(verify=ctx, timeout=5).post(url(srv, "/token"))
     print("TLS12 EXC:", type(e.value).__name__, e.value)
     assert srv.counter["n"] == before
+
+
+def test_bad_body_without_auth_is_401_not_422(srv, pki):
+    with client(pki, "java-writer") as c:
+        r = c.post(url(srv, "/orders"), json={"nope": 1})
+    assert r.status_code == 401 and r.json() == {"error": "malformed"}
+
+
+def test_bad_body_with_auth_is_422_invalid_body(srv, pki):
+    h = bearer(srv, pki, "java-writer")
+    with client(pki, "java-writer") as c:
+        r = c.post(url(srv, "/orders"), json={"nope": 1}, headers=h)
+    assert r.status_code == 422 and r.json() == {"error": "invalid_body"}
+
+
+def test_unknown_path_is_404_json(srv, pki):
+    with client(pki, "java-writer") as c:
+        r = c.get(url(srv, "/nope"))
+    assert r.status_code == 404 and r.json() == {"error": "http_404"}

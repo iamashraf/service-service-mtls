@@ -80,3 +80,8 @@ def test_hs256_with_public_key_bytes_rejected(key):
 
 def test_garbage_is_malformed(key):
     assert reason("garbage", key.public_key()) == "malformed"
+
+
+def test_wrong_issuer(key):
+    t = tokens.issue(key, "a", [], DER, NOW, iss="https://evil.example")
+    assert reason(t, key.public_key()) == "bad_issuer"

@@ -54,7 +54,9 @@ public final class Api {
     public static String accessToken(Result r) throws Exception {
         if (r.error() != null) throw r.error();
         if (r.status() != 200) throw new IllegalStateException("token failed: " + r.status() + " " + r.body());
-        return JSON.readTree(r.body()).get("access_token").asText();
+        String token = JSON.readTree(r.body()).path("access_token").asText("");
+        if (token.isEmpty()) throw new IllegalStateException("token response has no access_token: " + r.body());
+        return token;
     }
 
     /** GET /orders with a Bearer token. */

@@ -19,8 +19,8 @@ def issue(key: ec.EllipticCurvePrivateKey, sub: str, scopes: list[str], der: byt
     return jwt.encode(claims, key, algorithm="ES256")
 
 
-def verify(token: str, pub, aud: str, now: int) -> dict:
-    """Check signature, then expiry, then audience. Raises AuthError; returns claims."""
+def verify(token: str, pub, aud: str, now: int, iss: str = "https://api.demo") -> dict:
+    """Check signature, then expiry, audience, then issuer. Raises AuthError; returns claims."""
     try:
         # alg pinned to ES256 so `none` and HS256 (keyed with the public key) are refused;
         # signature is verified here before any claim is looked at
@@ -40,4 +40,6 @@ def verify(token: str, pub, aud: str, now: int) -> dict:
     tok_aud = claims.get("aud")
     if tok_aud != aud and not (isinstance(tok_aud, list) and aud in tok_aud):
         raise AuthError("bad_audience", 401)
+    if claims.get("iss") != iss:
+        raise AuthError("bad_issuer", 401)
     return claims
