@@ -1,51 +1,95 @@
 # service-service-mtls
 
-A runnable demo of AuthN and AuthZ with certificate-bound access tokens. A Go mock CA hands out certs. A FastAPI server verifies the client cert, then issues and checks a token bound to it. A Java 25 client calls the server, and a stolen token is useless on another cert.
+**Demo only. Not for production.** A runnable demo of how two services prove who they are (AuthN) and what they may do (AuthZ). Calls use mutual TLS, and each access token is bound to the client's certificate. A stolen token is useless on any other cert.
 
-## Run
+One command starts a Go certificate authority, a FastAPI server and a Java 25 client. The client runs seven checks and exits 0 only if every one behaves as expected.
+
+## What this demonstrates
+
+| Skill | Where to see it |
+|---|---|
+| PKI and mutual TLS | [Go CA](cmd/ca/handler.go), [TLS 1.3 server setup](api/app/tls.py) |
+| Certificate-bound tokens ([RFC 8705](https://www.rfc-editor.org/rfc/rfc8705)) | [token and thumbprint code](api/app/tokens.py) |
+| Authorization design | [policy table](api/app/policy.py), [ordered checks](api/app/guard.py) |
+| Three languages in one system | Go, Python 3.12, Java 25 |
+| Containers | [compose.yaml](compose.yaml), three Containerfiles, podman |
+| Testing | Go tests, 49 pytest tests including live TLS, an end-to-end run |
+
+## See it in 2 minutes
+
+You need `podman` with `podman compose`.
 
 ```sh
 podman compose up --build --exit-code-from client
 ```
 
-Success: the client prints a result table where every row says `yes` in the MATCH column, and the exit code is 0.
+Real output from a run:
 
-```sh
-podman compose down -v
+```text
+SCENARIO                         EXPECTED                   MATCH  ACTUAL
+1 writer GET /orders             200                        yes    200
+1 writer POST /orders            201                        yes    201
+2 reader POST /orders            403 insufficient_scope     yes    403 insufficient_scope
+2 reader GET /orders             200                        yes    200
+3 reader replays writer token    401 thumbprint_mismatch    yes    401 thumbprint_mismatch
+4 rogue cert                     TLS handshake rejected     yes    java.io.IOException: Connection reset
+4 control: writer still served   200                        yes    200
 ```
 
-## Prerequisites
+Clean up with `podman compose down -v`.
 
-- podman with `podman compose`. Nothing else is needed to run.
-- Optional: `go test ./...` for the CA tests and `pytest` in `api/`.
+## Architecture
 
-## Services
+The [interactive runtime architecture diagram](https://iamashraf.github.io/service-service-mtls/runtime-architecture.html) shows the services, the trust boundary and the request path.
 
-| Service | Stack | Address | Endpoints |
+| Service | Stack | Address | Job |
 |---|---|---|---|
-| ca | Go mock CA | `ca.demo:8080` | `POST /enroll` |
-| api | FastAPI on Hypercorn | `api.demo:8443` | `POST /token`, `GET /orders`, `POST /orders` |
+| ca | Go | `ca.demo:8080` | Issues certs at `POST /enroll` |
+| api | FastAPI on Hypercorn | `api.demo:8443` | Requires a client cert, issues and checks tokens |
 | client | Java 25 | none | Runs the scenarios and sets the exit code |
 
-## Scenarios
+1. Each service enrolls with the CA and gets a cert.
+2. The client calls `POST /token` over mTLS.
+3. The API signs a token that carries the SHA-256 thumbprint of the client cert.
+4. The client calls `/orders` with the token.
+5. The API checks the token, the thumbprint and the scope.
 
-| Scenario | Result |
-|---|---|
-| writer `GET /orders` | 200 |
-| writer `POST /orders` | 201 |
-| reader `POST /orders` | 403 `insufficient_scope` |
-| reader `GET /orders` | 200 |
-| reader replays the writer's token | 401 `thumbprint_mismatch` |
-| rogue-CA cert | TLS handshake rejected |
-| control: writer still served | 200 |
+## Design decisions
 
-## Demo shortcuts
+- **Bind the token to the cert.** The token holds the cert thumbprint, so a copy sent over another connection fails with 401.
+- **Scopes come from a server policy.** The API looks up the cert CN. Nothing in the request can raise a scope.
+- **401 and 403 mean different things.** 401 means identity or binding failed. 403 means the identity is known and the action is not allowed.
+- **TLS 1.3 only.** Hypercorn allows 1.2 by default, so a `Config` subclass raises the floor. A test shows a 1.2 client is rejected.
+- **Constant-time compare.** The thumbprint check does not leak timing.
+- **A pinned adapter for the peer cert.** ASGI servers verify client certs but do not pass them to the app. A small `TCPServer` subclass does, and a test checks that concurrent connections never see each other's cert.
+
+## How it is verified
+
+- `go test ./...` covers the CA and cert issuing.
+- `pytest` in `api/` runs 49 tests. They include real TLS handshakes, every rejection reason, and `alg: none` and HS256 tokens.
+- The client run is the end-to-end test. Breaking the thumbprint check makes it exit 1.
+- [CI](.github/workflows/ci.yml) runs the Go and Python tests on every push.
+
+## Known limits
 
 - `/enroll` is unauthenticated plain HTTP and returns the private key. A real CA takes a CSR and checks who asks.
 - The apps trust the CA cert from that same call.
-- There is no rotation or revocation.
+- There is no rotation, revocation or key publishing (JWKS).
+- A TLS-terminating proxy in front of the API would hide the client cert and break the binding.
+- The Java client has no unit tests. The end-to-end run covers it.
 
-## More
+## Docs
 
-- [docs/guide.md](docs/guide.md): how it works, scenario by scenario
-- [docs/runtime-architecture.html](docs/runtime-architecture.html): interactive runtime diagram
+- [docs/tutorial.md](docs/tutorial.md): step-by-step tutorial with links to the code and the standards
+- [docs/guide.md](docs/guide.md): how it works, scenario by scenario, with real log lines
+
+## Layout
+
+- `cmd/ca/`, `internal/pki/`: the Go CA
+- `api/`: the FastAPI server and its tests
+- `client/`: the Java client
+- `docs/`: tutorial, guide and the architecture diagram
+
+## Contributing, security and license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Released under the [Apache License 2.0](LICENSE).
