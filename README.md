@@ -84,7 +84,7 @@ The [interactive runtime architecture diagram](https://iamashraf.github.io/servi
 
 ## Container security
 
-All three services run with the same limits. The [guide](docs/guide.md#container-hardening) gives the reason for each.
+All three services run with the same limits. The [guide](guides/guide.md#container-hardening) gives the reason for each.
 
 - They run as `nobody` (uid 65534), not root.
 - The root filesystem is read-only. Only tmpfs mounts are writable: `/tmp`, `/var/tmp` and `/dev/shm`.
@@ -113,15 +113,16 @@ All three services run with the same limits. The [guide](docs/guide.md#container
 
 ## Docs
 
-- [docs/tutorial.md](docs/tutorial.md): step-by-step tutorial with links to the code and the standards
-- [docs/guide.md](docs/guide.md): how it works, scenario by scenario, with real log lines
+- [guides/tutorial.md](guides/tutorial.md): step-by-step tutorial with links to the code and the standards
+- [guides/guide.md](guides/guide.md): how it works, scenario by scenario, with real log lines
 
 ## Layout
 
 - `cmd/ca/`, `internal/pki/`: the Go CA
 - `api/`: the FastAPI server and its tests
 - `client/`: the Java client
-- `docs/`: tutorial, guide and the architecture diagram
+- `guides/`: tutorial and guide
+- `docs/`: the architecture diagram, served by GitHub Pages
 
 ## Contributing, security and license
 
