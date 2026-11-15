@@ -15,10 +15,12 @@ class OrderIn(BaseModel):
     item: str
 
 
-def create_app(resolve, now=time.time) -> FastAPI:
-    """Build the app. `resolve` is an async kid -> public key (the JWKS cache); `now` is a clock."""
+def create_app(resolve, now=time.time, orders: list[str] | None = None) -> FastAPI:
+    """Build the app. `resolve` is an async kid -> public key (the JWKS cache); `now` is a clock.
+
+    `orders` is the shared order list (the gRPC server gets the same object)."""
     app = FastAPI()
-    orders: list[str] = []
+    orders = [] if orders is None else orders
 
     install_error_handlers(app)
 
