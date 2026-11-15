@@ -19,6 +19,7 @@ from cryptography.x509.oid import NameOID
 from hypercorn.asyncio import serve
 
 from app import binding, tls, tokens
+from app.exchange import ACCESS_TOKEN, GRANT
 from app.jwks import JwksClient, mtls_fetcher
 from app.keys import KeySet
 
@@ -319,7 +320,7 @@ def test_jwks_and_metadata_documents(auth, pki):
     assert meta["tls_client_certificate_bound_access_tokens"] is True
     assert meta["issuer"] == tokens.ISS and meta["jwks_uri"].endswith("/.well-known/jwks.json")
     assert meta["token_endpoint"] == tokens.ISS + "/token"
-    assert set(meta["grant_types_supported"]) == {"client_credentials"}
+    assert set(meta["grant_types_supported"]) == {"client_credentials", GRANT}
 
 
 def test_rogue_ca_client_cert_is_rejected_in_handshake(auth, pki):
@@ -393,3 +394,51 @@ def test_one_log_line_per_request(auth, srv, pki, caplog):
         c.post(url(srv, "/orders"), json={"item": "ok"}, headers=h)
     lines = [r.getMessage() for r in caplog.records if r.name == "app" and "decision=" in r.getMessage()]
     assert [l.split("decision=")[1] for l in lines] == ["deny reason=invalid_body", "allow reason=ok"]
+
+
+# ---- token exchange over HTTP ----
+def exchange(auth, pki, who, subject, **over):
+    form = {"grant_type": GRANT, "subject_token": subject, "subject_token_type": ACCESS_TOKEN,
+            "audience": "api.demo", **over}
+    return get_token(auth, pki, who, data=form)
+
+
+def subject_of(auth, pki, who):
+    return get_token(auth, pki, who).json()["access_token"]
+
+
+def test_exchange_narrows_and_the_narrowed_token_works_at_the_api(auth, srv, pki):
+    r = exchange(auth, pki, "java-writer", subject_of(auth, pki, "java-writer"), scope="orders:read")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scope"] == "orders:read" and body["issued_token_type"] == ACCESS_TOKEN
+    assert body["token_type"] == "Bearer" and body["expires_in"] == 300
+    assert decode(auth, body["access_token"])["cnf"] == {"x5t#S256": binding.thumbprint(pki["java-writer.der"])}
+    h = {"Authorization": "Bearer " + body["access_token"]}
+    with client(pki, "java-writer") as c:
+        assert c.get(url(srv, "/orders"), headers=h).status_code == 200
+        r = c.post(url(srv, "/orders"), json={"item": "x"}, headers=h)
+    assert r.status_code == 403 and r.json() == {"error": "insufficient_scope"}
+
+
+def test_exchange_reader_asking_for_write_is_invalid_scope(auth, pki):
+    r = exchange(auth, pki, "java-reader", subject_of(auth, pki, "java-reader"), scope="orders:write")
+    assert r.status_code == 400 and r.json()["error"] == "invalid_scope"
+
+
+def test_exchange_with_other_certs_subject_token_is_thumbprint_mismatch(auth, pki):
+    r = exchange(auth, pki, "java-reader", subject_of(auth, pki, "java-writer"))
+    assert r.status_code == 400
+    assert r.json() == {"error": "invalid_grant", "error_description": "thumbprint_mismatch"}
+
+
+def test_exchange_unknown_audience_is_invalid_target(auth, pki):
+    r = exchange(auth, pki, "java-writer", subject_of(auth, pki, "java-writer"), audience="other.demo")
+    assert r.status_code == 400 and r.json()["error"] == "invalid_target"
+
+
+def test_exchange_widened_scope_is_never_granted(auth, pki):
+    sub = subject_of(auth, pki, "java-reader")
+    for scope in ("orders:read orders:write", "orders:admin"):
+        r = exchange(auth, pki, "java-reader", sub, scope=scope)
+        assert r.status_code == 400 and r.json()["error"] == "invalid_scope"
