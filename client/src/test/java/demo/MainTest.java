@@ -59,6 +59,16 @@ class MainTest {
     }
 
     @Test
+    void forgeWithRealKidCopiesTheKidFromTheRealHeader() throws Exception {
+        var b = java.util.Base64.getUrlEncoder().withoutPadding();
+        String real = b.encodeToString("{\"alg\":\"ES256\",\"kid\":\"abc\"}".getBytes()) + "."
+                + b.encodeToString("{\"sub\":\"w\"}".getBytes()) + ".s";
+        var head = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(java.util.Base64.getUrlDecoder().decode(Main.forgeWithRealKid(real).split("\\.")[0]));
+        assertEquals("abc", head.get("kid").asText());
+    }
+
+    @Test
     void forgeKeepsClaimsSetsNewExpAndSignsWithKidAndRawEcSignature() throws Exception {
         var b = java.util.Base64.getUrlEncoder().withoutPadding();
         String real = "h." + b.encodeToString("{\"sub\":\"java-writer\",\"exp\":1}".getBytes()) + ".s";

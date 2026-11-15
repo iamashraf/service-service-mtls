@@ -54,6 +54,7 @@ public final class Main {
 
             // 6: a token signed with a key that is not in the auth server's JWKS must be rejected.
             rows.add(check("6 forged token, key not in JWKS", 401, "bad_signature", writer.get(forge(wt))));
+            rows.add(check("6 forged signature, real kid", 401, "bad_signature", writer.get(forgeWithRealKid(wt))));
 
             // 7: token exchange. Narrowing works, and every bad exchange is refused with a 400.
             Api.Result ex = writer.exchange(wt, "api.demo", "orders:read");
@@ -106,12 +107,23 @@ public final class Main {
 
     /** Copies the claims of a real token, sets a new exp, and signs with a fresh EC key the server does not know. */
     static String forge(String realToken) throws Exception {
+        return forge(realToken, "forged");
+    }
+
+    /** Same, but the header names a kid that IS in the JWKS, so only the signature check can catch it. */
+    static String forgeWithRealKid(String realToken) throws Exception {
+        var head = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(java.util.Base64.getUrlDecoder().decode(realToken.split("\\.")[0]));
+        return forge(realToken, head.path("kid").asText());
+    }
+
+    private static String forge(String realToken, String kid) throws Exception {
         var json = new com.fasterxml.jackson.databind.ObjectMapper();
         var dec = java.util.Base64.getUrlDecoder();
         var enc = java.util.Base64.getUrlEncoder().withoutPadding();
         var claims = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(dec.decode(realToken.split("\\.")[1]));
         claims.put("exp", System.currentTimeMillis() / 1000 + 300);
-        String head = enc.encodeToString("{\"alg\":\"ES256\",\"typ\":\"JWT\",\"kid\":\"forged\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String head = enc.encodeToString(("{\"alg\":\"ES256\",\"typ\":\"JWT\",\"kid\":\"" + kid + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         String input = head + "." + enc.encodeToString(json.writeValueAsBytes(claims));
         var kpg = java.security.KeyPairGenerator.getInstance("EC");
         kpg.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
