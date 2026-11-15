@@ -18,6 +18,7 @@ public final class Main {
         String ca = System.getenv().getOrDefault("CA_URL", "http://ca.demo:8080");
         String url = System.getenv().getOrDefault("API_URL", "https://api.demo:8443");
         String authUrl = System.getenv().getOrDefault("AUTH_URL", "https://auth.demo:8443");
+        String grpcTarget = System.getenv().getOrDefault("GRPC_TARGET", "api.demo:9443");
         List<Row> rows = new ArrayList<>();
         try {
             Map<String, String> secrets = secrets(System.getenv("ENROLL_SECRETS"));
@@ -63,6 +64,37 @@ public final class Main {
             rows.add(check("7 reader asks orders:write", 400, "invalid_scope scope_not_allowed", reader.exchange(rt, "api.demo", "orders:write")));
             rows.add(check("7 reader uses writer subject token", 400, "invalid_grant thumbprint_mismatch", reader.exchange(wt, "api.demo", null)));
             rows.add(check("7 unknown audience", 400, "invalid_target audience_not_allowed", writer.exchange(wt, "other.demo", null)));
+
+            // 8: the same checks over gRPC. Tokens come from a TokenSource that fetches over mTLS as the channel's identity.
+            try (OrdersGrpc gw = new OrdersGrpc(w, grpcTarget, new TokenSource(writer::token, java.time.Clock.systemUTC()));
+                 OrdersGrpc gr = new OrdersGrpc(r, grpcTarget, new TokenSource(reader::token, java.time.Clock.systemUTC()));
+                 OrdersGrpc gr0 = new OrdersGrpc(r, grpcTarget, null);
+                 OrdersGrpc gx = new OrdersGrpc(x, grpcTarget, null)) {
+                rows.add(checkGrpc("8 grpc writer Add", "OK", gw.add("book")));
+                rows.add(checkGrpc("8 grpc writer List", "OK", gw.list()));
+                rows.add(checkGrpc("8 grpc reader Add", "PERMISSION_DENIED insufficient_scope", gr.add("book")));
+                rows.add(checkGrpc("8 grpc reader List", "OK", gr.list()));
+                // The writer's token goes in a plain header on a channel that uses the reader's cert.
+                rows.add(checkGrpc("8 grpc reader replays writer token", "UNAUTHENTICATED thumbprint_mismatch", gr0.listWithToken(wt)));
+                rows.add(grpcRejected("8 grpc rogue cert", gx.list()));
+                rows.add(checkGrpc("8 grpc control: writer still served", "OK", gw.list()));
+            }
+
+            // 9: DPoP. The client cert is still needed at TLS, but the token is bound to a proof key.
+            Dpop dp = new Dpop();
+            String tokenUrl = authUrl + "/token", ordersUrl = url + "/orders";
+            String dt = Api.accessToken(writer.tokenDpop(dp.proof("POST", tokenUrl, null)));
+            rows.add(check("9 dpop GET /orders", 200, null, writer.getDpop(dt, dp.proof("GET", ordersUrl, dt))));
+            rows.add(check("9 dpop POST /orders", 201, null, writer.postDpop(dt, dp.proof("POST", ordersUrl, dt), "book")));
+            rows.add(check("9 dpop proof from other key", 401, "dpop_jkt_mismatch", writer.getDpop(dt, new Dpop().proof("GET", ordersUrl, dt))));
+            rows.add(check("9 dpop wrong htu", 401, "dpop_htu", writer.getDpop(dt, dp.proof("GET", ordersUrl + "/other", dt))));
+            rows.add(check("9 dpop wrong htm", 401, "dpop_htm", writer.getDpop(dt, dp.proof("POST", ordersUrl, dt))));
+            // The same proof twice: the first use must pass, the second is a replay of its jti.
+            String once = dp.proof("GET", ordersUrl, dt);
+            Api.Result first = writer.getDpop(dt, once);
+            if (first.status() != 200) rows.add(check("9 dpop reused jti (first use)", 200, null, first));
+            rows.add(check("9 dpop reused jti", 401, "dpop_replay", writer.getDpop(dt, once)));
+            rows.add(check("9 dpop token as Bearer", 401, "dpop_required", writer.get(dt)));
         } catch (Exception e) {
             print(rows);
             System.err.println("FAILED: " + e.getMessage() + (e.getCause() != null ? " (" + e.getCause() + ")" : ""));
@@ -131,6 +163,16 @@ public final class Main {
         }
         String act = res.error() != null ? describe(res.error()) : "HTTP " + res.status() + " (not rejected)";
         return new Row(name, "TLS handshake rejected", ok, act);
+    }
+
+    /** Compares the gRPC status text ("OK" or "CODE message") exactly. */
+    static Row checkGrpc(String name, String expected, OrdersGrpc.Result res) {
+        return new Row(name, expected, expected.equals(res.text()), res.text());
+    }
+
+    /** A rejected TLS handshake surfaces in gRPC as UNAVAILABLE; any other status (even a clean OK) fails the row. */
+    static Row grpcRejected(String name, OrdersGrpc.Result res) {
+        return new Row(name, "TLS handshake rejected", res.code() == io.grpc.Status.Code.UNAVAILABLE, res.text());
     }
 
     /** Exception class and message. */

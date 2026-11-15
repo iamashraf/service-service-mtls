@@ -71,4 +71,19 @@ class MainTest {
         assertTrue(json.readTree(d.decode(p[1])).get("exp").asLong() > 1);
         assertEquals(64, d.decode(p[2]).length);
     }
+
+    @Test
+    void checkGrpcComparesStatusTextExactly() {
+        var denied = new OrdersGrpc.Result(io.grpc.Status.Code.PERMISSION_DENIED, "insufficient_scope");
+        assertTrue(Main.checkGrpc("x", "PERMISSION_DENIED insufficient_scope", denied).match());
+        assertFalse(Main.checkGrpc("x", "OK", denied).match());
+        assertEquals("OK", Main.checkGrpc("x", "OK", new OrdersGrpc.Result(io.grpc.Status.Code.OK, "")).actual());
+    }
+
+    @Test
+    void grpcRejectedPassesOnlyOnUnavailable() {
+        assertTrue(Main.grpcRejected("x", new OrdersGrpc.Result(io.grpc.Status.Code.UNAVAILABLE, "ssl")).match());
+        assertFalse(Main.grpcRejected("x", new OrdersGrpc.Result(io.grpc.Status.Code.UNAUTHENTICATED, "x")).match());
+        assertFalse(Main.grpcRejected("x", new OrdersGrpc.Result(io.grpc.Status.Code.OK, "")).match());
+    }
 }

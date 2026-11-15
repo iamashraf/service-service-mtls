@@ -11,6 +11,7 @@ WORKDIR /app
 COPY --from=build /w/target/client.jar /app/client.jar
 ENV CA_URL=http://ca.demo:8080 \
     API_URL=https://api.demo:8443 \
-    AUTH_URL=https://auth.demo:8443
+    AUTH_URL=https://auth.demo:8443 \
+    GRPC_TARGET=api.demo:9443
 USER 65534:65534
 CMD ["java","-jar","/app/client.jar"]

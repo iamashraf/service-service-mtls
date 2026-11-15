@@ -52,7 +52,7 @@ public final class Api {
 
     /** POST /token with no body; returns the raw result. */
     public Result token() {
-        return send(authBase, "POST", "/token", null, null, null);
+        return send(authBase, "POST", "/token", null, null, null, null);
     }
 
     /** POST /token as a token exchange (form-encoded); scope may be null to keep the subject's scope. */
@@ -61,7 +61,12 @@ public final class Api {
                 + "&subject_token=" + enc(subjectToken)
                 + "&subject_token_type=" + enc("urn:ietf:params:oauth:token-type:access_token")
                 + "&audience=" + enc(audience) + (scope == null ? "" : "&scope=" + enc(scope));
-        return send(authBase, "POST", "/token", null, form, "application/x-www-form-urlencoded");
+        return send(authBase, "POST", "/token", null, null, form, "application/x-www-form-urlencoded");
+    }
+
+    /** POST /token with a DPoP proof header; the token comes back bound to the proof's key. */
+    public Result tokenDpop(String proof) {
+        return send(authBase, "POST", "/token", null, proof, null, null);
     }
 
     private static String enc(String v) {
@@ -79,22 +84,37 @@ public final class Api {
 
     /** GET /orders with a Bearer token. */
     public Result get(String token) {
-        return send(base, "GET", "/orders", token, null, "application/json");
+        return send(base, "GET", "/orders", "Bearer " + token, null, null, "application/json");
+    }
+
+    /** GET /orders with {@code Authorization: DPoP <token>} and a proof. */
+    public Result getDpop(String token, String proof) {
+        return send(base, "GET", "/orders", "DPoP " + token, proof, null, "application/json");
+    }
+
+    /** POST /orders {"item": item} with {@code Authorization: DPoP <token>} and a proof. */
+    public Result postDpop(String token, String proof, String item) {
+        try {
+            return send(base, "POST", "/orders", "DPoP " + token, proof, JSON.writeValueAsString(Map.of("item", item)), "application/json");
+        } catch (Exception e) {
+            return new Result(-1, "", e);
+        }
     }
 
     /** POST /orders {"item": item} with a Bearer token. */
     public Result post(String token, String item) {
         try {
-            return send(base, "POST", "/orders", token, JSON.writeValueAsString(Map.of("item", item)), "application/json");
+            return send(base, "POST", "/orders", "Bearer " + token, null, JSON.writeValueAsString(Map.of("item", item)), "application/json");
         } catch (Exception e) {
             return new Result(-1, "", e);
         }
     }
 
     /** Sends one request; never throws. Retries ConnectException up to 20 x 250ms on the run's first call only. */
-    private Result send(String host, String method, String path, String token, String json, String type) {
+    private Result send(String host, String method, String path, String auth, String dpop, String json, String type) {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(host + path)).timeout(Duration.ofSeconds(5));
-        if (token != null) b.header("Authorization", "Bearer " + token);
+        if (auth != null) b.header("Authorization", auth);
+        if (dpop != null) b.header("DPoP", dpop);
         if (json != null) b.header("Content-Type", type);
         b.method(method, json == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json));
         HttpRequest req = b.build();
