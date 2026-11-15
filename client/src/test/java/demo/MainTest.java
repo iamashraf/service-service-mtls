@@ -49,4 +49,26 @@ class MainTest {
         assertFalse(Main.check("x", 401, "insufficient_scope", r).match());
         assertFalse(Main.check("x", 403, null, r).match());
     }
+
+    @Test
+    void reasonJoinsErrorAndDescription() {
+        assertEquals("invalid_grant thumbprint_mismatch",
+                new Api.Result(400, "{\"error\":\"invalid_grant\",\"error_description\":\"thumbprint_mismatch\"}", null).reason());
+        assertEquals("insufficient_scope", new Api.Result(403, "{\"error\":\"insufficient_scope\"}", null).reason());
+        assertNull(new Api.Result(200, "{\"scope\":\"x\"}", null).reason());
+    }
+
+    @Test
+    void forgeKeepsClaimsSetsNewExpAndSignsWithKidAndRawEcSignature() throws Exception {
+        var b = java.util.Base64.getUrlEncoder().withoutPadding();
+        String real = "h." + b.encodeToString("{\"sub\":\"java-writer\",\"exp\":1}".getBytes()) + ".s";
+        String[] p = Main.forge(real).split("\\.");
+        var d = java.util.Base64.getUrlDecoder();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        assertEquals("ES256", json.readTree(d.decode(p[0])).get("alg").asText());
+        assertFalse(json.readTree(d.decode(p[0])).get("kid").asText().isEmpty());
+        assertEquals("java-writer", json.readTree(d.decode(p[1])).get("sub").asText());
+        assertTrue(json.readTree(d.decode(p[1])).get("exp").asLong() > 1);
+        assertEquals(64, d.decode(p[2]).length);
+    }
 }
