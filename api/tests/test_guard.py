@@ -122,3 +122,10 @@ def test_issue_scopes_come_from_policy_only():
     assert policy.scopes_for("rogue") is None
     # no scope-like parameter on any request-facing entry point
     assert "scope" not in inspect.signature(policy.scopes_for).parameters
+
+
+def test_dpop_token_as_bearer_or_without_dpop_support_is_dpop_required():
+    """gRPC passes no dpop argument: a jkt-bound token is refused, the DPoP scheme is malformed."""
+    c = good_claims(cnf={"jkt": "abc"})
+    assert fail(auth=bearer(c)) == ("dpop_required", 401)
+    assert fail(auth="DPoP " + sign(c)) == ("malformed", 401)

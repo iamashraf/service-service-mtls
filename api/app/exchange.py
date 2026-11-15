@@ -27,6 +27,8 @@ async def exchange(form: dict, der: bytes, cn: str, resolve, mint, now: int) -> 
     except AuthError as e:
         raise ExchangeError("invalid_grant", e.reason)
     cnf = claims.get("cnf")
+    if isinstance(cnf, dict) and "jkt" in cnf:
+        raise ExchangeError("invalid_grant", "dpop_subject_unsupported")
     thumb = cnf.get("x5t#S256") if isinstance(cnf, dict) else None
     if not isinstance(thumb, str) or not thumb:
         raise ExchangeError("invalid_grant", "no_cnf")

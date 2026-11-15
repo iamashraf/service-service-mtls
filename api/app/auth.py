@@ -1,12 +1,13 @@
 """Auth server: issues cert-bound tokens, publishes JWKS, exchanges tokens (RFC 8693)."""
 import asyncio
+import os
 import time
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import boot, exchange, policy, tls, tokens
+from . import boot, dpop, exchange, policy, tls, tokens
 from .guard import AuthError
 from .keys import KeySet
 from .web import install_error_handlers, log_decision
@@ -15,6 +16,8 @@ from .web import install_error_handlers, log_decision
 def create_app(keys: KeySet, now=time.time) -> FastAPI:
     """Build the app. `keys` holds the signing keys; `now` is a clock returning seconds."""
     app = FastAPI()
+    public = os.environ.get("AUTH_PUBLIC_URL", "https://auth.demo:8443")  # htu base, never the Host header
+    cache = dpop.JtiCache()
     install_error_handlers(app)
 
     async def resolve(kid: str):
@@ -49,6 +52,11 @@ def create_app(keys: KeySet, now=time.time) -> FastAPI:
         form = dict(parse_qsl((await request.body()).decode(errors="replace"),
                               keep_blank_values=True))
         grant = form.get("grant_type")
+        proofs = request.headers.getlist("dpop")
+        if proofs and grant == exchange.GRANT:
+            log_decision(ident, "deny", "dpop_on_exchange")
+            return JSONResponse({"error": "invalid_request", "error_description": "dpop_on_exchange"},
+                                status_code=400)
         if grant == exchange.GRANT:
             try:
                 out = await exchange.exchange(form, der, cn, resolve, mint, int(now()))
@@ -65,9 +73,15 @@ def create_app(keys: KeySet, now=time.time) -> FastAPI:
         if scopes is None:
             raise AuthError("no_policy", 403)
         kid, key = keys.current
-        tok = tokens.issue(key, cn, scopes, der, int(now()), policy.audiences_for(cn)[0], kid=kid)
+        cnf = None  # None: bind to the client cert
+        if proofs:
+            if len(proofs) > 1:
+                raise AuthError(dpop.MALFORMED, 401)
+            cnf = {"jkt": dpop.verify_proof(proofs[0], method="POST", url=public + "/token",
+                                            now=int(now()), access_token=None, cache=cache)}
+        tok = tokens.issue(key, cn, scopes, der, int(now()), policy.audiences_for(cn)[0], kid=kid, cnf=cnf)
         log_decision(ident, "allow", "ok")
-        return {"access_token": tok, "token_type": "Bearer", "expires_in": tokens.TTL,
+        return {"access_token": tok, "token_type": "DPoP" if proofs else "Bearer", "expires_in": tokens.TTL,
                 "scope": " ".join(scopes)}
 
     return app
