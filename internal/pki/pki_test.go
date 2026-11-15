@@ -26,7 +26,7 @@ func issue(t *testing.T, ca *CA, dns []string, eku x509.ExtKeyUsage, nb, na time
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := ca.Issue("x", dns, eku, nb, na, &key.PublicKey)
+	c, err := ca.Issue("x", dns, []x509.ExtKeyUsage{eku}, nb, na, &key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

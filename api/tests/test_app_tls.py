@@ -1,5 +1,6 @@
 """Live mTLS tests: real Hypercorn, real handshakes, certs generated in-test."""
 import asyncio
+import base64
 import datetime
 import json
 import logging
@@ -17,7 +18,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from hypercorn.asyncio import serve
 
-from app import binding, tls
+from app import binding, tls, tokens
+from app.jwks import JwksClient, mtls_fetcher
+from app.keys import KeySet
 
 def _name(cn):
     return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
@@ -108,7 +111,7 @@ def pki(tmp_path_factory):
     rogue_key, rogue = make_cert("rogue-ca", None, "rogue-ca", ca=True)
     out = {"ca": write_pair(tmp, "ca", ca_key, ca)[0],
            "server": write_pair(tmp, "server", *make_cert("localhost", ca_key, "demo-ca", san="localhost"))}
-    for cn in ("java-writer", "java-reader", "stranger"):
+    for cn in ("java-writer", "java-reader", "stranger", "api.demo"):
         k, c = make_cert(cn, ca_key, "demo-ca")
         out[cn] = write_pair(tmp, cn, k, c)
         out[cn + ".der"] = c.public_bytes(serialization.Encoding.DER)
@@ -166,24 +169,40 @@ def test_risk_concurrent_connections_do_not_leak_certs(pki):
 
 
 # ---- app tests ----
-from app.main import create_app  # noqa: E402
+from app.auth import create_app as create_auth_app  # noqa: E402
+from app.main import create_app as create_api_app  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def srv(pki):
-    """The real app behind mTLS, with a request counter and the signing key."""
-    tls.install()
-    key = ec.generate_private_key(ec.SECP256R1())
-    app = create_app(key)
+def counted(app):
+    """Wrap an ASGI app with a request counter."""
     counter = {"n": 0}
 
     async def counting(scope, receive, send):
         if scope["type"] == "http":
             counter["n"] += 1
         await app(scope, receive, send)
+    return counting, counter
 
-    with Server(counting, *pki["server"], pki["ca"]) as s:
-        s.key, s.counter = key, counter
+
+@pytest.fixture(scope="module")
+def auth(pki):
+    """The real auth app behind mTLS, with its KeySet and a request counter."""
+    tls.install()
+    keys = KeySet()
+    app, counter = counted(create_auth_app(keys))
+    with Server(app, *pki["server"], pki["ca"]) as s:
+        s.keys, s.counter = keys, counter
+        yield s
+
+
+@pytest.fixture(scope="module")
+def srv(pki, auth):
+    """The real resource server behind mTLS. Its keys come from `auth` over mTLS (as api.demo)."""
+    tls.install()
+    fetch = mtls_fetcher(url(auth, "/.well-known/jwks.json"), *pki["api.demo"], pki["ca"])
+    app, counter = counted(create_api_app(JwksClient(fetch).get))
+    with Server(app, *pki["server"], pki["ca"]) as s:
+        s.counter = counter
         yield s
 
 
@@ -191,90 +210,152 @@ def url(s, path):
     return f"https://localhost:{s.port}{path}"
 
 
-def get_token(srv, pki, who, **kw):
+def get_token(auth, pki, who, **kw):
     with client(pki, who) as c:
-        return c.post(url(srv, "/token"), **kw)
+        return c.post(url(auth, "/token"), **kw)
 
 
-def decode(srv, tok):
-    return jwt.decode(tok, srv.key.public_key(), algorithms=["ES256"], audience="api.demo")
+def decode(auth, tok):
+    pub = auth.keys.public(jwt.get_unverified_header(tok)["kid"])
+    return jwt.decode(tok, pub, algorithms=["ES256"], audience="api.demo", issuer=tokens.ISS)
 
 
-def test_token_for_writer_has_scopes_and_cnf(srv, pki):
-    r = get_token(srv, pki, "java-writer")
+def test_token_for_writer_has_scopes_and_cnf(auth, pki):
+    r = get_token(auth, pki, "java-writer")
     assert r.status_code == 200
     body = r.json()
     assert body["token_type"] == "Bearer" and body["expires_in"] == 300
-    claims = decode(srv, body["access_token"])
+    assert body["scope"] == "orders:read orders:write"
+    claims = decode(auth, body["access_token"])
     assert claims["sub"] == "java-writer"
     assert claims["scope"] == "orders:read orders:write"
     assert claims["cnf"]["x5t#S256"] == binding.thumbprint(pki["java-writer.der"])
 
 
-def test_unknown_cn_gets_403_no_policy(srv, pki):
-    r = get_token(srv, pki, "stranger")
+def test_client_credentials_grant_is_the_initial_flow(auth, pki):
+    r = get_token(auth, pki, "java-reader", data={"grant_type": "client_credentials"})
+    assert r.status_code == 200 and r.json()["scope"] == "orders:read"
+
+
+def test_unknown_grant_type_is_400(auth, pki):
+    r = get_token(auth, pki, "java-reader", data={"grant_type": "password"})
+    assert r.status_code == 400 and r.json() == {"error": "unsupported_grant_type"}
+
+
+def test_unknown_cn_gets_403_no_policy(auth, pki):
+    r = get_token(auth, pki, "stranger")
     assert r.status_code == 403 and r.json() == {"error": "no_policy"}
 
 
-def bearer(srv, pki, who):
-    return {"Authorization": "Bearer " + get_token(srv, pki, who).json()["access_token"]}
+def bearer(auth, pki, who):
+    return {"Authorization": "Bearer " + get_token(auth, pki, who).json()["access_token"]}
 
 
-def test_orders_read_write_ok_for_writer(srv, pki):
-    h = bearer(srv, pki, "java-writer")
+def test_orders_read_write_ok_for_writer(auth, srv, pki):
+    h = bearer(auth, pki, "java-writer")
     with client(pki, "java-writer") as c:
         assert c.post(url(srv, "/orders"), json={"item": "book"}, headers=h).status_code == 201
         r = c.get(url(srv, "/orders"), headers=h)
     assert r.status_code == 200 and "book" in json.dumps(r.json())
 
 
-def test_reader_post_is_403_insufficient_scope(srv, pki):
-    h = bearer(srv, pki, "java-reader")
+def test_reader_post_is_403_insufficient_scope(auth, srv, pki):
+    h = bearer(auth, pki, "java-reader")
     with client(pki, "java-reader") as c:
         r = c.post(url(srv, "/orders"), json={"item": "x"}, headers=h)
         assert r.status_code == 403 and r.json() == {"error": "insufficient_scope"}
         assert c.get(url(srv, "/orders"), headers=h).status_code == 200
 
 
-def test_replayed_token_with_other_cert_is_401_thumbprint_mismatch(srv, pki):
-    h = bearer(srv, pki, "java-writer")
+def test_replayed_token_with_other_cert_is_401_thumbprint_mismatch(auth, srv, pki):
+    h = bearer(auth, pki, "java-writer")
     with client(pki, "java-reader") as c:
         r = c.get(url(srv, "/orders"), headers=h)
     assert r.status_code == 401 and r.json() == {"error": "thumbprint_mismatch"}
 
 
-def test_rogue_ca_client_cert_is_rejected_in_handshake(srv, pki):
-    before = srv.counter["n"]
+def test_api_has_no_token_endpoint(srv, pki):
+    with client(pki, "java-writer") as c:
+        r = c.post(url(srv, "/token"))
+    assert r.status_code == 404 and r.json() == {"error": "http_404"}
+
+
+def forged(pki, auth, kid="evil"):
+    """A token signed by a key that is not in the JWKS, with the writer's claims and cnf."""
+    return tokens.issue(ec.generate_private_key(ec.SECP256R1()), "java-writer",
+                        ["orders:read", "orders:write"], pki["java-writer.der"], int(time.time()),
+                        kid=kid)
+
+
+def test_token_signed_by_key_not_in_jwks_is_bad_signature(auth, srv, pki):
+    with client(pki, "java-writer") as c:
+        r = c.get(url(srv, "/orders"), headers={"Authorization": "Bearer " + forged(pki, auth)})
+    assert r.status_code == 401 and r.json() == {"error": "bad_signature"}
+
+
+def test_token_without_kid_is_malformed(auth, srv, pki):
+    t = jwt.encode({"sub": "x"}, ec.generate_private_key(ec.SECP256R1()), algorithm="ES256")
+    with client(pki, "java-writer") as c:
+        r = c.get(url(srv, "/orders"), headers={"Authorization": "Bearer " + t})
+    assert r.status_code == 401 and r.json() == {"error": "malformed"}
+
+
+def test_alg_none_and_hs256_are_rejected_over_http(auth, srv, pki):
+    b64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")
+    kid = auth.keys.current[0]
+    claims = json.dumps({"iss": tokens.ISS, "aud": "api.demo", "exp": int(time.time()) + 99}).encode()
+    for alg in ("none", "HS256"):
+        t = b64(json.dumps({"alg": alg, "typ": "JWT", "kid": kid}).encode()) + "." + b64(claims) + "."
+        with client(pki, "java-writer") as c:
+            r = c.get(url(srv, "/orders"), headers={"Authorization": "Bearer " + t})
+        assert r.status_code == 401 and r.json() == {"error": "bad_signature"}
+
+
+def test_jwks_and_metadata_documents(auth, pki):
+    with client(pki, "java-reader") as c:
+        jwks = c.get(url(auth, "/.well-known/jwks.json")).json()
+        meta = c.get(url(auth, "/.well-known/oauth-authorization-server")).json()
+    assert [k["kid"] for k in jwks["keys"]] == [k["kid"] for k in auth.keys.jwks()["keys"]]
+    assert meta["tls_client_certificate_bound_access_tokens"] is True
+    assert meta["issuer"] == tokens.ISS and meta["jwks_uri"].endswith("/.well-known/jwks.json")
+    assert meta["token_endpoint"] == tokens.ISS + "/token"
+    assert set(meta["grant_types_supported"]) == {"client_credentials"}
+
+
+def test_rogue_ca_client_cert_is_rejected_in_handshake(auth, pki):
+    before = auth.counter["n"]
     with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
-        get_token(srv, pki, "rogue")
+        get_token(auth, pki, "rogue")
     print("ROGUE EXC:", type(e.value).__name__, e.value)
-    assert srv.counter["n"] == before  # no request reached the app
+    assert auth.counter["n"] == before  # no request reached the app
 
 
-def test_scopes_ignore_request_body(srv, pki):
-    r = get_token(srv, pki, "java-reader", json={"scope": "orders:write"},
+def test_scopes_ignore_request_body(auth, pki):
+    r = get_token(auth, pki, "java-reader", json={"scope": "orders:write"},
                   params={"scope": "orders:write"}, headers={"X-Scope": "orders:write"})
-    assert decode(srv, r.json()["access_token"])["scope"] == "orders:read"
+    assert decode(auth, r.json()["access_token"])["scope"] == "orders:read"
 
 
-def test_no_client_cert_is_rejected(srv, pki):
-    before = srv.counter["n"]
-    with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
-        get_token(srv, pki, None)
-    print("NOCERT EXC:", type(e.value).__name__, e.value)
-    assert srv.counter["n"] == before
+def test_no_client_cert_is_rejected(auth, srv, pki):
+    before = auth.counter["n"], srv.counter["n"]
+    for s in (auth, srv):
+        with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
+            get_token(s, pki, None)
+        print("NOCERT EXC:", type(e.value).__name__, e.value)
+    assert (auth.counter["n"], srv.counter["n"]) == before
 
 
-def test_tls12_client_is_rejected(srv, pki):
+def test_tls12_client_is_rejected(auth, srv, pki):
     """A client capped at TLS 1.2 (with a valid cert) fails and no request reaches the app."""
-    before = srv.counter["n"]
+    before = auth.counter["n"], srv.counter["n"]
     ctx = ssl.create_default_context(cafile=pki["ca"])
     ctx.load_cert_chain(*pki["java-writer"])
     ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-    with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
-        httpx.Client(verify=ctx, timeout=5).post(url(srv, "/token"))
-    print("TLS12 EXC:", type(e.value).__name__, e.value)
-    assert srv.counter["n"] == before
+    for s in (auth, srv):
+        with pytest.raises((httpx.TransportError, ssl.SSLError)) as e:
+            httpx.Client(verify=ctx, timeout=5).post(url(s, "/token"))
+        print("TLS12 EXC:", type(e.value).__name__, e.value)
+    assert (auth.counter["n"], srv.counter["n"]) == before
 
 
 def test_bad_body_without_auth_is_401_not_422(srv, pki):
@@ -283,8 +364,8 @@ def test_bad_body_without_auth_is_401_not_422(srv, pki):
     assert r.status_code == 401 and r.json() == {"error": "malformed"}
 
 
-def test_bad_body_with_auth_is_422_invalid_body(srv, pki):
-    h = bearer(srv, pki, "java-writer")
+def test_bad_body_with_auth_is_422_invalid_body(auth, srv, pki):
+    h = bearer(auth, pki, "java-writer")
     with client(pki, "java-writer") as c:
         r = c.post(url(srv, "/orders"), json={"nope": 1}, headers=h)
     assert r.status_code == 422 and r.json() == {"error": "invalid_body"}
@@ -303,12 +384,12 @@ def test_malformed_body_without_auth_is_401(srv, pki, body):
     assert r.status_code == 401 and r.json() == {"error": "malformed"}
 
 
-def test_one_log_line_per_request(srv, pki, caplog):
-    h = bearer(srv, pki, "java-writer")
+def test_one_log_line_per_request(auth, srv, pki, caplog):
+    h = bearer(auth, pki, "java-writer")
     caplog.set_level(logging.INFO, logger="app")
     caplog.clear()
     with client(pki, "java-writer") as c:
         c.post(url(srv, "/orders"), json={"nope": 1}, headers=h)
         c.post(url(srv, "/orders"), json={"item": "ok"}, headers=h)
-    lines = [r.getMessage() for r in caplog.records if r.name == "app"]
+    lines = [r.getMessage() for r in caplog.records if r.name == "app" and "decision=" in r.getMessage()]
     assert [l.split("decision=")[1] for l in lines] == ["deny reason=invalid_body", "allow reason=ok"]

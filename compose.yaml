@@ -1,8 +1,8 @@
 name: mtlsdemo
 
-# --exit-code-from aborts the stack when any container exits, so ca and api stay running.
+# --exit-code-from aborts the stack when any container exits, so ca, auth and api stay running.
 # Every service drops all capabilities, cannot gain privileges and has a read-only root
-# filesystem. Only tmpfs mounts are writable: /tmp (the api writes its cert files there),
+# filesystem. Only tmpfs mounts are writable: /tmp (auth and api write their cert files there),
 # plus /var/tmp and /dev/shm, which podman adds.
 x-hardening: &hardening
   read_only: true
@@ -19,19 +19,20 @@ services:
     command: ["ca"]
     # values come from .env.local (podman compose --env-file .env.local); the file is never committed or built into an image
     environment:
-      ENROLL_SECRETS: java-writer=${ENROLL_SECRET_WRITER:?},java-reader=${ENROLL_SECRET_READER:?},java-rogue=${ENROLL_SECRET_ROGUE:?},api.demo=${ENROLL_SECRET_API:?}
+      ENROLL_SECRETS: java-writer=${ENROLL_SECRET_WRITER:?},java-reader=${ENROLL_SECRET_READER:?},java-rogue=${ENROLL_SECRET_ROGUE:?},api.demo=${ENROLL_SECRET_API:?},auth.demo=${ENROLL_SECRET_AUTH:?}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 1s
       retries: 30
     networks:
       default: {aliases: [ca.demo]}
-  api:
+  auth:
     <<: *hardening
     build: {context: ./api, dockerfile: Containerfile}
+    command: ["python", "-m", "app.auth"]
     environment:
       CA_URL: http://ca.demo:8080
-      ENROLL_SECRET: ${ENROLL_SECRET_API:?}
+      ENROLL_SECRET: ${ENROLL_SECRET_AUTH:?}
     # a TCP connect proves the TLS port is open; the client cert is not needed for that
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8443), 2)"]
@@ -40,6 +41,24 @@ services:
     depends_on:
       ca: {condition: service_healthy}
     networks:
+      default: {aliases: [auth.demo]}
+  api:
+    <<: *hardening
+    build: {context: ./api, dockerfile: Containerfile}
+    command: ["python", "-m", "app.api"]
+    environment:
+      CA_URL: http://ca.demo:8080
+      AUTH_URL: https://auth.demo:8443
+      ENROLL_SECRET: ${ENROLL_SECRET_API:?}
+    # a TCP connect proves the TLS port is open; the client cert is not needed for that
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8443), 2)"]
+      interval: 1s
+      retries: 30
+    depends_on:
+      ca: {condition: service_healthy}
+      auth: {condition: service_healthy}
+    networks:
       default: {aliases: [api.demo]}
   client:
     <<: *hardening
@@ -47,6 +66,8 @@ services:
     environment:
       CA_URL: http://ca.demo:8080
       API_URL: https://api.demo:8443
+      AUTH_URL: https://auth.demo:8443
       ENROLL_SECRETS: java-writer=${ENROLL_SECRET_WRITER:?},java-reader=${ENROLL_SECRET_READER:?},java-rogue=${ENROLL_SECRET_ROGUE:?}
     depends_on:
+      auth: {condition: service_healthy}
       api: {condition: service_healthy}

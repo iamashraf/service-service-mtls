@@ -11,9 +11,11 @@ class AuthError(Exception):
         self.status = status
 
 
-def authorize(peer_der: bytes | None, authorization: str | None, required_scope: str,
-              pub, now: int) -> dict:
-    """Run the full check order and return claims. Only insufficient_scope is 403."""
+async def authorize(peer_der: bytes | None, authorization: str | None, required_scope: str,
+                    resolve, now: int) -> dict:
+    """Run the full check order and return claims. Only insufficient_scope is 403.
+
+    `resolve` is the async kid -> public key lookup (the JWKS cache on the api)."""
     from . import tokens  # tokens imports AuthError from here
 
     if not peer_der:
@@ -22,7 +24,7 @@ def authorize(peer_der: bytes | None, authorization: str | None, required_scope:
     # scheme is case-insensitive (RFC 7235)
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
         raise AuthError("malformed", 401)
-    claims = tokens.verify(parts[1], pub, "api.demo", now)
+    claims = await tokens.verify(parts[1], resolve, "api.demo", now)
     cnf = claims.get("cnf")
     thumb = cnf.get("x5t#S256") if isinstance(cnf, dict) else None
     if not isinstance(thumb, str) or not thumb:
