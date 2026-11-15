@@ -14,3 +14,7 @@ jobs:
         with: {python-version: "3.14"}
       - run: pip install -r requirements-dev.txt && pytest -q
         working-directory: api
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: "25", cache: maven}
+      - run: mvn -B -q test
+        working-directory: client
