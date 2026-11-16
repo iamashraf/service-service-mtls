@@ -61,7 +61,7 @@ func (c *CA) PEM() []byte {
 
 // Issue signs a leaf cert for the requester's public key; the CA never sees the private key.
 // eku limits what the cert may be used for.
-func (c *CA) Issue(cn string, dns []string, eku x509.ExtKeyUsage, notBefore, notAfter time.Time, pub *ecdsa.PublicKey) (certPEM []byte, err error) {
+func (c *CA) Issue(cn string, dns []string, eku []x509.ExtKeyUsage, notBefore, notAfter time.Time, pub *ecdsa.PublicKey) (certPEM []byte, err error) {
 	sn, err := serial()
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func (c *CA) Issue(cn string, dns []string, eku x509.ExtKeyUsage, notBefore, not
 		NotBefore:    notBefore,
 		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{eku}, // client vs server role is enforced by this
+		ExtKeyUsage:  eku, // client vs server role is enforced by this
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, c.Cert, pub, c.Key)
 	if err != nil {

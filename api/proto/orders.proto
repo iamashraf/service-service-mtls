@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package demo.orders;
+
+option java_package = "demo.orders";
+
+service Orders {
+  rpc List(ListRequest) returns (ListReply);
+  rpc Add(AddRequest) returns (ListReply);
+}
+
+message ListRequest {}
+
+message AddRequest {
+  string item = 1;
+}
+
+message ListReply {
+  repeated string orders = 1;
+}

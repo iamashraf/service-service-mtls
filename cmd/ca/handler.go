@@ -128,17 +128,20 @@ func enroll(w http.ResponseWriter, r *http.Request, demo, rogue *pki.CA, secrets
 		badRequest(w, "unknown issuer")
 		return
 	}
-	var eku x509.ExtKeyUsage
+	var eku []x509.ExtKeyUsage
 	var dns []string
 	switch req.Kind {
-	case "server":
+	case "server", "both": // "both" is for a service that also calls another service over mTLS
 		if len(req.DNS) == 0 {
 			badRequest(w, "dns required for server")
 			return
 		}
-		eku, dns = x509.ExtKeyUsageServerAuth, req.DNS
+		eku, dns = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, req.DNS
+		if req.Kind == "both" {
+			eku = append(eku, x509.ExtKeyUsageClientAuth)
+		}
 	case "client":
-		eku = x509.ExtKeyUsageClientAuth
+		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	default:
 		badRequest(w, "unknown kind")
 		return

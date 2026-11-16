@@ -53,8 +53,11 @@ def peer_identity() -> tuple[bytes, str] | None:
     already verified the chain against the demo CA before this value was set.
     """
     der = _peer_der.get()
-    if not der:
-        return None
+    return identity(der) if der else None
+
+
+def identity(der: bytes) -> tuple[bytes, str]:
+    """Return (DER, CN) for a verified client cert. Shared by the REST and gRPC servers."""
     try:
         cns = x509.load_der_x509_certificate(der).subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     except ValueError:

@@ -3,3 +3,5 @@ hypercorn==0.18.0
 pyjwt[crypto]==2.10.1
 cryptography==44.0.0
 httpx==0.28.1
+grpcio==1.85.1
+protobuf==7.36.2

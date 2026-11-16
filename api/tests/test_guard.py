@@ -1,3 +1,5 @@
+import asyncio
+
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -9,12 +11,16 @@ NOW = 1_000_000
 DER = b"client-cert-der"
 OTHER_DER = b"other-cert-der"
 KEY = ec.generate_private_key(ec.SECP256R1())
-PUB = KEY.public_key()
+KID = "k1"
+
+
+async def resolve(kid):
+    return KEY.public_key() if kid == KID else None
 
 
 def good_claims(**over):
     c = {
-        "iss": "https://api.demo", "sub": "java-writer", "aud": "api.demo",
+        "iss": tokens.ISS, "sub": "java-writer", "aud": "api.demo",
         "exp": NOW + 300, "scope": "orders:read orders:write",
         "cnf": {"x5t#S256": binding.thumbprint(DER)},
     }
@@ -23,7 +29,7 @@ def good_claims(**over):
 
 
 def sign(claims, key=KEY):
-    return jwt.encode(claims, key, algorithm="ES256")
+    return jwt.encode(claims, key, algorithm="ES256", headers={"kid": KID})
 
 
 def bearer(claims, key=KEY):
@@ -31,7 +37,7 @@ def bearer(claims, key=KEY):
 
 
 def run(peer=DER, auth=None, scope="orders:read", now=NOW):
-    return guard.authorize(peer, auth, scope, PUB, now)
+    return asyncio.run(guard.authorize(peer, auth, scope, resolve, now))
 
 
 def fail(**kw):
@@ -98,6 +104,16 @@ def test_scope_check_is_exact_token_match():
     assert fail(auth=bearer(c), scope="orders:read")[0] == "insufficient_scope"
 
 
+def test_missing_kid_is_malformed():
+    t = jwt.encode(good_claims(), KEY, algorithm="ES256")
+    assert fail(auth="Bearer " + t) == ("malformed", 401)
+
+
+def test_unknown_kid_is_bad_signature():
+    t = jwt.encode(good_claims(), KEY, algorithm="ES256", headers={"kid": "nope"})
+    assert fail(auth="Bearer " + t) == ("bad_signature", 401)
+
+
 def test_issue_scopes_come_from_policy_only():
     import inspect
     assert "scopes" in inspect.signature(tokens.issue).parameters  # caller passes policy output
@@ -106,3 +122,10 @@ def test_issue_scopes_come_from_policy_only():
     assert policy.scopes_for("rogue") is None
     # no scope-like parameter on any request-facing entry point
     assert "scope" not in inspect.signature(policy.scopes_for).parameters
+
+
+def test_dpop_token_as_bearer_or_without_dpop_support_is_dpop_required():
+    """gRPC passes no dpop argument: a jkt-bound token is refused, the DPoP scheme is malformed."""
+    c = good_claims(cnf={"jkt": "abc"})
+    assert fail(auth=bearer(c)) == ("dpop_required", 401)
+    assert fail(auth="DPoP " + sign(c)) == ("malformed", 401)

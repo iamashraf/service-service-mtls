@@ -9,6 +9,12 @@ go vet ./... && go test ./...
 cd api && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest -q
 ```
 
+The Java tests run in a container, so you need no local JDK or Maven:
+
+```sh
+podman run --rm -v $PWD/client:/w -v mvn-cache:/root/.m2 -w /w docker.io/library/maven:3-eclipse-temurin-25 mvn -B test
+```
+
 Run the full demo before you open a pull request. It must exit 0. It needs `.env.local`; see the [README](README.md#see-it-in-2-minutes).
 
 ```sh
@@ -19,7 +25,7 @@ podman compose --env-file .env.local down -v
 ## Check the containers and CI
 
 ```sh
-podman compose --env-file .env.local up -d ca api
+podman compose --env-file .env.local up -d ca auth api
 podman exec mtlsdemo-api-1 id      # expect uid=65534(nobody)
 podman compose --env-file .env.local down -v
 gh run watch                       # follow the latest CI run

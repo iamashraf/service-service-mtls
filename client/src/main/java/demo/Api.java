@@ -17,11 +17,14 @@ import javax.net.ssl.SSLParameters;
 public final class Api {
     /** Outcome of one call: HTTP status and body, or the exception if the call threw. */
     public record Result(int status, String body, Exception error) {
-        /** Returns the server's JSON "error" reason, or null if there is none. */
+        /** Returns the JSON "error", plus " " and "error_description" when present; null if there is no error. */
         public String reason() {
             try {
-                JsonNode e = new ObjectMapper().readTree(body).get("error");
-                return e == null ? null : e.asText();
+                JsonNode n = new ObjectMapper().readTree(body);
+                JsonNode e = n.get("error");
+                if (e == null) return null;
+                JsonNode d = n.get("error_description");
+                return d == null ? e.asText() : e.asText() + " " + d.asText();
             } catch (Exception ex) {
                 return null;
             }
@@ -34,20 +37,40 @@ public final class Api {
 
     private final HttpClient http;
     private final String base;
+    private final String authBase;
 
-    /** Creates a client for {@code base} (e.g. https://api.demo:8443) using the context's identity. */
-    public Api(SSLContext ctx, String base) {
+    /** Creates a client using the context's identity: /orders goes to {@code base}, /token to {@code authBase}. */
+    public Api(SSLContext ctx, String base, String authBase) {
         SSLParameters p = new SSLParameters();
         p.setProtocols(new String[] {"TLSv1.3"}); // TLS 1.3 only
         // Hostname check stays on: HTTPS algorithm is the default and we never override it.
         this.http = HttpClient.newBuilder().sslContext(ctx).sslParameters(p)
                 .connectTimeout(Duration.ofSeconds(5)).build();
         this.base = base;
+        this.authBase = authBase;
     }
 
     /** POST /token with no body; returns the raw result. */
     public Result token() {
-        return send("POST", "/token", null, null);
+        return send(authBase, "POST", "/token", null, null, null, null);
+    }
+
+    /** POST /token as a token exchange (form-encoded); scope may be null to keep the subject's scope. */
+    public Result exchange(String subjectToken, String audience, String scope) {
+        String form = "grant_type=" + enc("urn:ietf:params:oauth:grant-type:token-exchange")
+                + "&subject_token=" + enc(subjectToken)
+                + "&subject_token_type=" + enc("urn:ietf:params:oauth:token-type:access_token")
+                + "&audience=" + enc(audience) + (scope == null ? "" : "&scope=" + enc(scope));
+        return send(authBase, "POST", "/token", null, null, form, "application/x-www-form-urlencoded");
+    }
+
+    /** POST /token with a DPoP proof header; the token comes back bound to the proof's key. */
+    public Result tokenDpop(String proof) {
+        return send(authBase, "POST", "/token", null, proof, null, null);
+    }
+
+    private static String enc(String v) {
+        return java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** Extracts access_token from a successful /token result; throws if missing. */
@@ -61,23 +84,38 @@ public final class Api {
 
     /** GET /orders with a Bearer token. */
     public Result get(String token) {
-        return send("GET", "/orders", token, null);
+        return send(base, "GET", "/orders", "Bearer " + token, null, null, "application/json");
+    }
+
+    /** GET /orders with {@code Authorization: DPoP <token>} and a proof. */
+    public Result getDpop(String token, String proof) {
+        return send(base, "GET", "/orders", "DPoP " + token, proof, null, "application/json");
+    }
+
+    /** POST /orders {"item": item} with {@code Authorization: DPoP <token>} and a proof. */
+    public Result postDpop(String token, String proof, String item) {
+        try {
+            return send(base, "POST", "/orders", "DPoP " + token, proof, JSON.writeValueAsString(Map.of("item", item)), "application/json");
+        } catch (Exception e) {
+            return new Result(-1, "", e);
+        }
     }
 
     /** POST /orders {"item": item} with a Bearer token. */
     public Result post(String token, String item) {
         try {
-            return send("POST", "/orders", token, JSON.writeValueAsString(Map.of("item", item)));
+            return send(base, "POST", "/orders", "Bearer " + token, null, JSON.writeValueAsString(Map.of("item", item)), "application/json");
         } catch (Exception e) {
             return new Result(-1, "", e);
         }
     }
 
     /** Sends one request; never throws. Retries ConnectException up to 20 x 250ms on the run's first call only. */
-    private Result send(String method, String path, String token, String json) {
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(5));
-        if (token != null) b.header("Authorization", "Bearer " + token);
-        if (json != null) b.header("Content-Type", "application/json");
+    private Result send(String host, String method, String path, String auth, String dpop, String json, String type) {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(host + path)).timeout(Duration.ofSeconds(5));
+        if (auth != null) b.header("Authorization", auth);
+        if (dpop != null) b.header("DPoP", dpop);
+        if (json != null) b.header("Content-Type", type);
         b.method(method, json == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json));
         HttpRequest req = b.build();
         int tries = FIRST.getAndSet(false) ? 20 : 1;

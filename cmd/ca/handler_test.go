@@ -38,7 +38,7 @@ func setup(t *testing.T) (http.Handler, *pki.CA) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secrets := map[string]string{"java-writer": testSecret, "api": testSecret, "evil": testSecret, "a": testSecret}
+	secrets := map[string]string{"java-writer": testSecret, "api": testSecret, "evil": testSecret, "a": testSecret, "auth.demo": testSecret}
 	return NewHandler(demo, rogue, secrets, time.Now), demo
 }
 
@@ -211,6 +211,17 @@ func TestEnrollServer(t *testing.T) {
 	}
 }
 
+func TestEnrollBothIsServerAndClient(t *testing.T) {
+	h, _ := setup(t)
+	e := mustEnroll(t, h, `{"name":"auth.demo","kind":"both","dns":["auth.demo"]}`)
+	c := leaf(t, e.CertPEM)
+	for _, u := range []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth} {
+		if _, err := c.Verify(x509.VerifyOptions{Roots: roots(e.CAPEM), DNSName: "auth.demo", KeyUsages: []x509.ExtKeyUsage{u}}); err != nil {
+			t.Fatal(u, err)
+		}
+	}
+}
+
 func TestRogueIssuerFailsAgainstDemoCA(t *testing.T) {
 	h, demo := setup(t)
 	e := mustEnroll(t, h, `{"name":"evil","kind":"client","issuer":"rogue"}`)
@@ -233,6 +244,7 @@ func TestEnrollRejects(t *testing.T) {
 		"unknown kind":     `{"name":"a","kind":"admin"}`,
 		"unknown issuer":   `{"name":"a","kind":"client","issuer":"other"}`,
 		"server no dns":    `{"name":"a","kind":"server"}`,
+		"both no dns":      `{"name":"a","kind":"both"}`,
 		"server empty dns": `{"name":"a","kind":"server","dns":[]}`,
 		"unknown field":    `{"name":"a","kind":"client","x":1}`,
 		"bad json":         `nope`,

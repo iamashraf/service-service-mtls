@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Runs the five demo scenarios against the API and prints a result table. */
+/** Runs the seven demo scenarios against the API and prints a result table. */
 public final class Main {
     /** One result line of the table. */
     record Row(String scenario, String expected, boolean match, String actual) {}
@@ -17,15 +17,17 @@ public final class Main {
     public static void main(String[] args) {
         String ca = System.getenv().getOrDefault("CA_URL", "http://ca.demo:8080");
         String url = System.getenv().getOrDefault("API_URL", "https://api.demo:8443");
+        String authUrl = System.getenv().getOrDefault("AUTH_URL", "https://auth.demo:8443");
+        String grpcTarget = System.getenv().getOrDefault("GRPC_TARGET", "api.demo:9443");
         List<Row> rows = new ArrayList<>();
         try {
             Map<String, String> secrets = secrets(System.getenv("ENROLL_SECRETS"));
             Identity w = Enroller.enroll(ca, "java-writer", "client", "demo", secrets.get("java-writer"));
             Identity r = Enroller.enroll(ca, "java-reader", "client", "demo", secrets.get("java-reader"));
             Identity x = Enroller.enroll(ca, "java-rogue", "client", "rogue", secrets.get("java-rogue"));
-            Api writer = new Api(Tls.contextFor(w), url);
-            Api reader = new Api(Tls.contextFor(r), url);
-            Api rogue = new Api(Tls.contextFor(x), url);
+            Api writer = new Api(Tls.contextFor(w), url, authUrl);
+            Api reader = new Api(Tls.contextFor(r), url, authUrl);
+            Api rogue = new Api(Tls.contextFor(x), url, authUrl);
 
             // 1: writer may read and write. POST /orders replies 201 (created).
             String wt = Api.accessToken(writer.token());
@@ -49,6 +51,51 @@ public final class Main {
             // writer enrolled with its secret above, which is why scenarios 1 to 3 ran at all.
             rows.add(enrollRefused("5 attacker enrolls, no secret", ca, null));
             rows.add(enrollRefused("5 attacker enrolls, wrong secret", ca, java.util.UUID.randomUUID().toString()));
+
+            // 6: a token signed with a key that is not in the auth server's JWKS must be rejected.
+            rows.add(check("6 forged token, key not in JWKS", 401, "bad_signature", writer.get(forge(wt))));
+            rows.add(check("6 forged signature, real kid", 401, "bad_signature", writer.get(forgeWithRealKid(wt))));
+
+            // 7: token exchange. Narrowing works, and every bad exchange is refused with a 400.
+            Api.Result ex = writer.exchange(wt, "api.demo", "orders:read");
+            rows.add(check("7 writer exchanges down to orders:read", 200, null, ex));
+            String nt = Api.accessToken(ex);
+            rows.add(check("7 narrowed token GET /orders", 200, null, writer.get(nt)));
+            rows.add(check("7 narrowed token POST /orders", 403, "insufficient_scope", writer.post(nt, "book")));
+            rows.add(check("7 reader asks orders:write", 400, "invalid_scope scope_not_allowed", reader.exchange(rt, "api.demo", "orders:write")));
+            rows.add(check("7 reader uses writer subject token", 400, "invalid_grant thumbprint_mismatch", reader.exchange(wt, "api.demo", null)));
+            rows.add(check("7 unknown audience", 400, "invalid_target audience_not_allowed", writer.exchange(wt, "other.demo", null)));
+
+            // 8: the same checks over gRPC. Tokens come from a TokenSource that fetches over mTLS as the channel's identity.
+            try (OrdersGrpc gw = new OrdersGrpc(w, grpcTarget, new TokenSource(writer::token, java.time.Clock.systemUTC()));
+                 OrdersGrpc gr = new OrdersGrpc(r, grpcTarget, new TokenSource(reader::token, java.time.Clock.systemUTC()));
+                 OrdersGrpc gr0 = new OrdersGrpc(r, grpcTarget, null);
+                 OrdersGrpc gx = new OrdersGrpc(x, grpcTarget, null)) {
+                rows.add(checkGrpc("8 grpc writer Add", "OK", gw.add("book")));
+                rows.add(checkGrpc("8 grpc writer List", "OK", gw.list()));
+                rows.add(checkGrpc("8 grpc reader Add", "PERMISSION_DENIED insufficient_scope", gr.add("book")));
+                rows.add(checkGrpc("8 grpc reader List", "OK", gr.list()));
+                // The writer's token goes in a plain header on a channel that uses the reader's cert.
+                rows.add(checkGrpc("8 grpc reader replays writer token", "UNAUTHENTICATED thumbprint_mismatch", gr0.listWithToken(wt)));
+                rows.add(grpcRejected("8 grpc rogue cert", gx.list()));
+                rows.add(checkGrpc("8 grpc control: writer still served", "OK", gw.list()));
+            }
+
+            // 9: DPoP. The client cert is still needed at TLS, but the token is bound to a proof key.
+            Dpop dp = new Dpop();
+            String tokenUrl = authUrl + "/token", ordersUrl = url + "/orders";
+            String dt = Api.accessToken(writer.tokenDpop(dp.proof("POST", tokenUrl, null)));
+            rows.add(check("9 dpop GET /orders", 200, null, writer.getDpop(dt, dp.proof("GET", ordersUrl, dt))));
+            rows.add(check("9 dpop POST /orders", 201, null, writer.postDpop(dt, dp.proof("POST", ordersUrl, dt), "book")));
+            rows.add(check("9 dpop proof from other key", 401, "dpop_jkt_mismatch", writer.getDpop(dt, new Dpop().proof("GET", ordersUrl, dt))));
+            rows.add(check("9 dpop wrong htu", 401, "dpop_htu", writer.getDpop(dt, dp.proof("GET", ordersUrl + "/other", dt))));
+            rows.add(check("9 dpop wrong htm", 401, "dpop_htm", writer.getDpop(dt, dp.proof("POST", ordersUrl, dt))));
+            // The same proof twice: the first use must pass, the second is a replay of its jti.
+            String once = dp.proof("GET", ordersUrl, dt);
+            Api.Result first = writer.getDpop(dt, once);
+            if (first.status() != 200) rows.add(check("9 dpop reused jti (first use)", 200, null, first));
+            rows.add(check("9 dpop reused jti", 401, "dpop_replay", writer.getDpop(dt, once)));
+            rows.add(check("9 dpop token as Bearer", 401, "dpop_required", writer.get(dt)));
         } catch (Exception e) {
             print(rows);
             System.err.println("FAILED: " + e.getMessage() + (e.getCause() != null ? " (" + e.getCause() + ")" : ""));
@@ -56,6 +103,34 @@ public final class Main {
         }
         print(rows);
         System.exit(rows.stream().allMatch(Row::match) ? 0 : 1);
+    }
+
+    /** Copies the claims of a real token, sets a new exp, and signs with a fresh EC key the server does not know. */
+    static String forge(String realToken) throws Exception {
+        return forge(realToken, "forged");
+    }
+
+    /** Same, but the header names a kid that IS in the JWKS, so only the signature check can catch it. */
+    static String forgeWithRealKid(String realToken) throws Exception {
+        var head = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(java.util.Base64.getUrlDecoder().decode(realToken.split("\\.")[0]));
+        return forge(realToken, head.path("kid").asText());
+    }
+
+    private static String forge(String realToken, String kid) throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var dec = java.util.Base64.getUrlDecoder();
+        var enc = java.util.Base64.getUrlEncoder().withoutPadding();
+        var claims = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(dec.decode(realToken.split("\\.")[1]));
+        claims.put("exp", System.currentTimeMillis() / 1000 + 300);
+        String head = enc.encodeToString(("{\"alg\":\"ES256\",\"typ\":\"JWT\",\"kid\":\"" + kid + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String input = head + "." + enc.encodeToString(json.writeValueAsBytes(claims));
+        var kpg = java.security.KeyPairGenerator.getInstance("EC");
+        kpg.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+        var sig = java.security.Signature.getInstance("SHA256withECDSAinP1363Format");
+        sig.initSign(kpg.generateKeyPair().getPrivate());
+        sig.update(input.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        return input + "." + enc.encodeToString(sig.sign());
     }
 
     /** Expects the CA to answer 403 to an enrollment as java-writer with the given secret. */
@@ -102,6 +177,16 @@ public final class Main {
         return new Row(name, "TLS handshake rejected", ok, act);
     }
 
+    /** Compares the gRPC status text ("OK" or "CODE message") exactly. */
+    static Row checkGrpc(String name, String expected, OrdersGrpc.Result res) {
+        return new Row(name, expected, expected.equals(res.text()), res.text());
+    }
+
+    /** A rejected TLS handshake surfaces in gRPC as UNAVAILABLE; any other status (even a clean OK) fails the row. */
+    static Row grpcRejected(String name, OrdersGrpc.Result res) {
+        return new Row(name, "TLS handshake rejected", res.code() == io.grpc.Status.Code.UNAVAILABLE, res.text());
+    }
+
     /** Exception class and message. */
     private static String describe(Throwable t) {
         return t.getClass().getName() + ": " + t.getMessage();
@@ -109,7 +194,7 @@ public final class Main {
 
     /** Prints the SCENARIO / EXPECTED / MATCH / ACTUAL table. */
     private static void print(List<Row> rows) {
-        String f = "%-32s %-26s %-6s %s%n";
+        String f = "%-40s %-44s %-6s %s%n";
         System.out.printf(f, "SCENARIO", "EXPECTED", "MATCH", "ACTUAL");
         for (Row r : rows) System.out.printf(f, r.scenario(), r.expected(), r.match() ? "yes" : "NO", r.actual());
     }

@@ -49,4 +49,51 @@ class MainTest {
         assertFalse(Main.check("x", 401, "insufficient_scope", r).match());
         assertFalse(Main.check("x", 403, null, r).match());
     }
+
+    @Test
+    void reasonJoinsErrorAndDescription() {
+        assertEquals("invalid_grant thumbprint_mismatch",
+                new Api.Result(400, "{\"error\":\"invalid_grant\",\"error_description\":\"thumbprint_mismatch\"}", null).reason());
+        assertEquals("insufficient_scope", new Api.Result(403, "{\"error\":\"insufficient_scope\"}", null).reason());
+        assertNull(new Api.Result(200, "{\"scope\":\"x\"}", null).reason());
+    }
+
+    @Test
+    void forgeWithRealKidCopiesTheKidFromTheRealHeader() throws Exception {
+        var b = java.util.Base64.getUrlEncoder().withoutPadding();
+        String real = b.encodeToString("{\"alg\":\"ES256\",\"kid\":\"abc\"}".getBytes()) + "."
+                + b.encodeToString("{\"sub\":\"w\"}".getBytes()) + ".s";
+        var head = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(java.util.Base64.getUrlDecoder().decode(Main.forgeWithRealKid(real).split("\\.")[0]));
+        assertEquals("abc", head.get("kid").asText());
+    }
+
+    @Test
+    void forgeKeepsClaimsSetsNewExpAndSignsWithKidAndRawEcSignature() throws Exception {
+        var b = java.util.Base64.getUrlEncoder().withoutPadding();
+        String real = "h." + b.encodeToString("{\"sub\":\"java-writer\",\"exp\":1}".getBytes()) + ".s";
+        String[] p = Main.forge(real).split("\\.");
+        var d = java.util.Base64.getUrlDecoder();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        assertEquals("ES256", json.readTree(d.decode(p[0])).get("alg").asText());
+        assertFalse(json.readTree(d.decode(p[0])).get("kid").asText().isEmpty());
+        assertEquals("java-writer", json.readTree(d.decode(p[1])).get("sub").asText());
+        assertTrue(json.readTree(d.decode(p[1])).get("exp").asLong() > 1);
+        assertEquals(64, d.decode(p[2]).length);
+    }
+
+    @Test
+    void checkGrpcComparesStatusTextExactly() {
+        var denied = new OrdersGrpc.Result(io.grpc.Status.Code.PERMISSION_DENIED, "insufficient_scope");
+        assertTrue(Main.checkGrpc("x", "PERMISSION_DENIED insufficient_scope", denied).match());
+        assertFalse(Main.checkGrpc("x", "OK", denied).match());
+        assertEquals("OK", Main.checkGrpc("x", "OK", new OrdersGrpc.Result(io.grpc.Status.Code.OK, "")).actual());
+    }
+
+    @Test
+    void grpcRejectedPassesOnlyOnUnavailable() {
+        assertTrue(Main.grpcRejected("x", new OrdersGrpc.Result(io.grpc.Status.Code.UNAVAILABLE, "ssl")).match());
+        assertFalse(Main.grpcRejected("x", new OrdersGrpc.Result(io.grpc.Status.Code.UNAUTHENTICATED, "x")).match());
+        assertFalse(Main.grpcRejected("x", new OrdersGrpc.Result(io.grpc.Status.Code.OK, "")).match());
+    }
 }
